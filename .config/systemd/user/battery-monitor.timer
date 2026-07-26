@@ -1,0 +1,10 @@
+[Unit]
+Description=Battery Monitor Timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=battery-monitor.service
+
+[Install]
+WantedBy=timers.target

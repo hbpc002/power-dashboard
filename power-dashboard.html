@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>系统资源仪表盘</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:20px}
+h1{text-align:center;font-weight:300;font-size:20px;margin-bottom:8px;color:#94a3b8;letter-spacing:2px}
+.tabs{display:flex;gap:0;margin-bottom:16px;max-width:1100px;margin-left:auto;margin-right:auto}
+.tab-btn{flex:1;padding:10px;text-align:center;cursor:pointer;background:#1e293b;border:1px solid #334155;color:#94a3b8;font-size:14px;transition:background .2s}
+.tab-btn:first-child{border-radius:8px 0 0 8px}
+.tab-btn:last-child{border-radius:0 8px 8px 0}
+.tab-btn.active{background:#60a5fa;color:#fff;font-weight:600}
+.tab-btn:hover{background:#334155}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;max-width:1100px;margin:0 auto}
+.card{background:#1e293b;border-radius:12px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+.card h2{font-size:15px;color:#94a3b8;margin-bottom:12px;border-bottom:1px solid #334155;padding-bottom:8px}
+.row{display:flex;justify-content:space-between;padding:5px 0;font-size:14px}
+.row+.row{border-top:1px solid #334155}
+.label{color:#64748b}
+.value{font-weight:600;font-family:'Cascadia Code','JetBrains Mono',monospace}
+.bar-bg{height:6px;background:#334155;border-radius:3px;margin-top:6px;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px;transition:width .5s}
+.green{color:#4ade80}.yellow{color:#facc15}.red{color:#f87171}.blue{color:#60a5fa}.purple{color:#a78bfa}.cyan{color:#22d3ee}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600}
+.badge-green{background:rgba(74,222,128,.15);color:#4ade80}
+.badge-yellow{background:rgba(250,204,21,.15);color:#facc15}
+.badge-red{background:rgba(248,113,113,.15);color:#f87171}
+.section{margin-top:10px}
+.section-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.flex{display:flex;gap:12px;flex-wrap:wrap}
+.flex-1{flex:1;min-width:100px;text-align:center}
+.big-num{font-size:24px;font-weight:700;font-family:monospace}
+.big-unit{font-size:11px;color:#64748b}
+.chart-svg{width:100%;height:50px;display:block}
+.chart-labels{display:flex;justify-content:space-between;font-size:10px;color:#64748b;margin-top:3px}
+.file-row{cursor:pointer;padding:4px 0;border-bottom:1px solid #334155;font-size:13px}
+.file-row:hover{background:rgba(96,165,250,.1);border-radius:4px}
+.del-btn{background:rgba(248,113,113,.15);color:#f87171;border:1px solid #f87171;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:12px}
+.del-btn:hover{background:rgba(248,113,113,.3)}
+.footer{text-align:center;margin-top:20px;font-size:11px;color:#475569}
+input[type=number]{background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:13px;width:55px}
+.hidden{display:none}
+#fileTab,.tab-content{display:none}
+#fileTab.active{display:block}
+#statsTab.active{display:block}
+.link{color:#60a5fa;cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+<h1>&#9889; 系统资源仪表盘</h1>
+<div class="tabs">
+  <div class="tab-btn active" onclick="switchTab('stats')">&#x1f4ca; 系统监控</div>
+  <div class="tab-btn" onclick="switchTab('files')">&#x1f4c1; 文件管理</div>
+</div>
+<div id="statsTab" class="tab-content active">
+<div class="grid" id="grid"></div>
+</div>
+<div id="fileTab" class="tab-content">
+<div class="card" style="max-width:1100px;margin:0 auto">
+<h2>&#x1f4c1; 文件浏览器</h2>
+<div class="section"><div class="row"><span class="label">路径</span><span class="value" style="word-break:break-all" id="filePath">/home/hbpc</span></div></div>
+<div id="fileList"><div class="row"><span class="label">加载中...</span></div></div>
+<div id="fileContent" class="hidden"></div>
+</div>
+</div>
+<div class="footer" id="footer"></div>
+<script>
+var histMem=[],histCpu=[],histLoad=[],histNetRx=[],histNetTx=[],histTs=[],maxPts=2400;
+var lastNetRx=0,lastNetTx=0;
+var currDir="/home/hbpc";
+var currThresh=parseInt(localStorage.getItem('battThreshold')||'20');
+function $(id){return document.getElementById(id)}
+function esc(s){return s?String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"):""}
+function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v))}
+function fmtB(b){if(b===null||b===undefined)return"-";if(b<1024)return b+" B";if(b<1048576)return(b/1024).toFixed(1)+" KB";if(b<1073741824)return(b/1048576).toFixed(1)+" MB";return(b/1073741824).toFixed(2)+" GB"}
+function fmtPct(v){return(v*100).toFixed(1)+"%"}
+function fmtTime(ts){var d=new Date(ts||Date.now());return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+function fmtDate(ts){if(!ts)return'';var d=new Date(ts*1000);return ('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+function downSamp(arr,n){if(arr.length<=n)return arr.slice();var step=Math.ceil(arr.length/n),out=[];for(var i=0;i<arr.length;i+=step)out.push(arr[i]);if(out[out.length-1]!==arr[arr.length-1])out.push(arr[arr.length-1]);return out;}
+function sparkline(data){
+  if(!data||data.length<2)return '<svg class="chart-svg" viewBox="0 0 200 50"><text x="100" y="25" text-anchor="middle" fill="#64748b" font-size="12">暂无数据</text></svg>';
+  var all=data.slice();
+  var mx=Math.max.apply(null,all);var mn=Math.min.apply(null,all);mx=mx||1;mn=mn||0;var rng=mx-mn||1;
+  var pts=data.map(function(v,i){var x=(i/(data.length-1))*190+5;var y=45-((v-mn)/rng)*40;return x+','+y;}).join(' ');
+  var color='#4ade80';var last=data[data.length-1];
+  if(last>mx*rng*.8)color='#f87171';else if(last>mx*rng*.5)color='#facc15';
+  return '<svg class="chart-svg" viewBox="0 0 200 50" preserveAspectRatio="none"><polyline fill="none" stroke="'+color+'" stroke-width="2" points="'+pts+'"/><circle cx="195" cy="'+(45-((last-mn)/rng)*40)+'" r="3" fill="'+color+'"/></svg>';
+}
+function switchTab(tab){
+  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active')});
+  document.querySelectorAll('.tab-content').forEach(function(t){t.classList.remove('active')});
+  if(tab==='stats'){document.querySelectorAll('.tab-btn')[0].classList.add('active');$('statsTab').classList.add('active')}
+  else{document.querySelectorAll('.tab-btn')[1].classList.add('active');$('fileTab').classList.add('active');listFiles(currDir)}
+}
+function navDir(dir){
+  if(dir==='..'){var p=currDir.split('/');if(p.length>2)currDir=p.slice(0,-1).join('/')||'/';}
+  else{currDir=currDir.replace(/\/$/,'')+'/'+dir;}
+  $('filePath').textContent=currDir;listFiles(currDir);
+}
+function getExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(i).toLowerCase():''}
+function getFileIcon(e){
+  if(e.is_dir)return '&#x1f4c1;';
+  var ex=getExt(e.name);
+  if(ex.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/))return '&#x1f5bc;';
+  if(ex.match(/\.(mp3|wav|ogg|flac|aac)$/))return '&#x1f3b5;';
+  if(ex.match(/\.(mp4|webm|avi|mkv|mov)$/))return '&#x1f3ac;';
+  if(ex.match(/\.(txt|log|py|sh|json|html|css|js|xml|yaml|yml|csv|md|conf)$/))return '&#x1f4dd;';
+  return '&#x1f4c4;';
+}
+function listFiles(path){
+  $('fileList').innerHTML='<div class="row"><span class="label">加载中...</span></div>';
+  fetch('/api/files?path='+encodeURIComponent(path)).then(function(r){return r.json()}).then(function(data){
+    if(!data||!data.entries){$('fileList').innerHTML="<div class='row'><span class='label'>无法访问</span></div>";return;}
+    var html='<div class="row" style="padding:4px 0;flex-wrap:wrap;gap:4px"><label style="cursor:pointer"><input type="checkbox" id="selAll" onchange="toggleAll(this)"> 全选</label> <button class="del-btn" onclick="batchDel()">&#x1f5d1; 删除选中</button> <label class="del-btn" style="background:#2563eb;color:#fff;border:none;cursor:pointer">&#x1f4c4; 上传文件<input type="file" id="uploadInput" multiple style="display:none" onchange="uploadFiles(this.files)"></label></div><div class="row" style="font-size:11px;color:#475569;padding:2px 0"><span style="flex:1;margin-left:22px">名称</span><span style="width:80px;text-align:right">修改日期</span><span style="width:70px;text-align:right">大小</span></div>';
+    if(data.path!=='/'){html+='<div class="file-row" onclick="navDir(\'..\')"><span class="label">&#x2B05; ..</span><span class="value">-</span></div>';}
+    data.entries.forEach(function(e){
+      var icon=getFileIcon(e);
+      var n=esc(e.name);var sz=e.is_dir?'-':fmtB(e.size);
+      var a=e.is_dir?"navDir('"+e.name+"')":"viewFile('"+e.name+"')";
+      html+='<div class="file-row" style="display:flex;align-items:center"><input type="checkbox" class="sel-item" value="'+n+'" style="margin-right:6px" onclick="event.stopPropagation()"><span class="label" onclick="'+a+'" style="cursor:pointer;flex:1">'+icon+' '+n+'</span><span class="value" style="font-size:11px;color:#64748b;width:80px;text-align:right">'+fmtDate(e.mtime)+'</span><span class="value" style="width:70px;text-align:right">'+sz+'</span></div>';
+    });
+    $('fileList').innerHTML=html;$('fileContent').classList.add('hidden');
+  });
+}
+function toggleAll(cb){document.querySelectorAll('.sel-item').forEach(function(e){e.checked=cb.checked;});}
+function batchDel(){
+  var sel=[];document.querySelectorAll('.sel-item:checked').forEach(function(e){sel.push(e.value);});
+  if(!sel.length)return alert('请先选择文件');if(!confirm('确认删除选中的 '+sel.length+' 个文件/目录？'))return;
+  var p=currDir;sel.forEach(function(n){
+    fetch('/api/files?file='+encodeURIComponent(p+'/'+n),{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){
+      if(!d.ok)console.warn('删除失败:',n,d.error);
+    });
+  });
+  setTimeout(function(){listFiles(currDir);$('fileContent').classList.add('hidden');},300);
+}
+function uploadFiles(files){
+  if(!files.length)return;
+  var done=0,total=files.length;
+  for(var i=0;i<total;i++){
+    (function(f){
+      var reader=new FileReader();
+      reader.onload=function(e){
+        fetch('/api/files?action=upload&file='+encodeURIComponent(currDir+'/'+f.name),{method:'PUT',body:e.target.result}).then(function(r){return r.json()}).then(function(d){
+          done++;if(d.ok){if(done===total)listFiles(currDir);}else{alert('上传失败: '+f.name+' '+d.error);}
+        });
+      };
+      reader.readAsArrayBuffer(f);
+    })(files[i]);
+  }
+}
+function showPreview(html){
+  $('fileContent').classList.remove('hidden');
+  $('fileContent').innerHTML=html;
+  setTimeout(function(){$('fileContent').scrollIntoView({behavior:'smooth',block:'nearest'});},100);
+}
+function deleteFile(name){
+  if(!confirm('确认删除 '+name+' ？'))return;
+  var p=currDir+'/'+name;
+  fetch('/api/files?file='+encodeURIComponent(p),{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){listFiles(currDir);$('fileContent').classList.add('hidden');}
+    else{alert('删除失败: '+d.error);}
+  });
+}
+function saveFile(name){
+  var body=$('editArea').value;
+  var p=currDir+'/'+name;
+  fetch('/api/files?action=save&file='+encodeURIComponent(p),{method:'POST',body:body}).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){alert('保存成功');$('fileContent').classList.add('hidden');listFiles(currDir);}
+    else{alert('保存失败: '+d.error);}
+  });
+}
+function viewFile(name){
+  var p=currDir+'/'+name;var ex=getExt(name);
+  var isImg=!!ex.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/);
+  var isAudio=!!ex.match(/\.(mp3|wav|ogg|flac|aac)$/);
+  var isVideo=!!ex.match(/\.(mp4|webm|avi|mkv|mov)$/);
+  var isText=!!ex.match(/\.(txt|log|py|sh|json|html|css|js|xml|yaml|yml|csv|md|conf|yaml)$/)||!ex;
+  if(isImg){
+    var src='/api/files?action=serve&file='+encodeURIComponent(p);
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><img src="'+src+'" style="max-width:100%;max-height:400px;border-radius:8px;display:block;margin:8px 0" onerror="this.style.display=\'none\'"><div class="row"><span class="label"></span><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    return;
+  }
+  if(isAudio){
+    var src='/api/files?action=serve&file='+encodeURIComponent(p);
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><audio controls style="width:100%;margin:8px 0"><source src="'+src+'"></audio><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    return;
+  }
+  if(isVideo){
+    var src='/api/files?action=serve&file='+encodeURIComponent(p);
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><video controls style="max-width:100%;max-height:400px;margin:8px 0;border-radius:8px"><source src="'+src+'"></video><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    return;
+  }
+  if(isText){
+    fetch('/api/files?action=read&file='+encodeURIComponent(p)).then(function(r){return r.json()}).then(function(data){
+      if(!data||data.content===undefined){showPreview('<div class="row"><span class="label">无法读取</span></div>');return;}
+      var cont=data.content;
+      if(data.truncated)cont+='\n...(截断，共'+data.total_lines+'行)';
+      showPreview('<div class="section"><div class="section-label">'+esc(name)+' ('+fmtB(data.content.length)+') <a class="link" onclick="this.parentNode.nextElementSibling.style.display=(this.parentNode.nextElementSibling.style.display==\'none\'?\'block\':\'none\')">&#x270f; 编辑</a></div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px;color:#e2e8f0">'+esc(cont)+'</pre><textarea id="editArea" style="display:none;width:100%;height:200px;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:8px;padding:10px;font-size:13px;font-family:monospace;margin-top:8px">'+esc(data.content)+'</textarea><div class="row" style="margin-top:4px"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button><button onclick="saveFile(\''+name+'\')" style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer">&#x1f4be; 保存</button></div></div>');
+    });
+    return;
+  }
+  fetch('/api/files?action=read&file='+encodeURIComponent(p)).then(function(r){return r.json()}).then(function(d){
+    if(!d||d.content===undefined){showPreview('<div class="row"><span class="label">无法预览</span><span class="value"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></span></div>');return;}
+    var l=d.content.split('\n');var pv=l.slice(0,50).join('\n');
+    if(d.truncated)pv+='\n...(截断)';
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px">'+esc(pv)+'</pre><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+  });
+}
+function updateThresh(){currThresh=$('threshInput').value;localStorage.setItem('battThreshold',currThresh);}
+async function fetchStats(){
+  try{
+    var r=await fetch("/api/stats");
+    var d=await r.json();
+    render(d);
+  }catch(e){}
+}
+function render(d){
+  var bat=d.batteries[0],ac=d.ac[0],onAc=ac&&ac.POWER_SUPPLY_ONLINE==="1";
+  var cap=parseInt(bat?.POWER_SUPPLY_CAPACITY)||0;
+  var status=bat?.POWER_SUPPLY_STATUS||"?";
+  var curMa=d.hwmon_cur_mA||(parseInt(bat?.POWER_SUPPLY_CURRENT_NOW)||0)/1000;
+  var volMv=d.hwmon_vol_mV||(parseInt(bat?.POWER_SUPPLY_VOLTAGE_NOW)||0)/1000;
+  var curA=curMa/1000;var volV=volMv/1000;var pwW=(onAc||!bat)?0:curA*volV;
+  var cn=parseInt(bat?.POWER_SUPPLY_CHARGE_NOW)||0;var cf=parseInt(bat?.POWER_SUPPLY_CHARGE_FULL)||1;var cycle=bat?.POWER_SUPPLY_CYCLE_COUNT||0;
+  var tempCpu=d.cpu_temp;var freqCpu=d.cpu_freq;var mem=d.memory;var load=d.load;var disk=d.disk_io;var net=d.network;
+  var usb=d.usb;
+  var usbChg=null;if(usb){usb.forEach(function(u){if(u.POWER_SUPPLY_ONLINE==="1"&&(!usbChg||u.POWER_SUPPLY_CURRENT_NOW>usbChg.cur))usbChg={src:u.POWER_SUPPLY_NAME,vol:parseInt(u.POWER_SUPPLY_VOLTAGE_NOW||0)/1e6,cur:parseInt(u.POWER_SUPPLY_CURRENT_NOW||0)/1e6}})}
+  histMem.push(mem?1-mem.available/mem.total:0);histCpu.push(tempCpu||0);histLoad.push(parseFloat(load?load[0]:0));histTs.push(Date.now());
+  var netRx=0,netTx=0;if(net){net.forEach(function(i){if(i&&i.operstate==="up"){netRx+=parseInt(i.rx_bytes||0);netTx+=parseInt(i.tx_bytes||0)}})}
+  histNetRx.push(Math.max(0,netRx-lastNetRx));histNetTx.push(Math.max(0,netTx-lastNetTx));var dRx=Math.max(0,netRx-lastNetRx),dTx=Math.max(0,netTx-lastNetTx);lastNetRx=netRx;lastNetTx=netTx;
+  if(histMem.length>maxPts)histMem.shift();if(histCpu.length>maxPts)histCpu.shift();if(histLoad.length>maxPts)histLoad.shift();if(histNetRx.length>maxPts)histNetRx.shift();if(histNetTx.length>maxPts)histNetTx.shift();if(histTs.length>maxPts)histTs.shift();
+  var capC=cap>60?"#4ade80":cap>20?"#facc15":"#f87171";
+  var batBadge=onAc?"badge-green":status==="Discharging"?"badge-yellow":"badge-red";
+  var memUsed=mem?1-mem.available/mem.total:0;var memC=memUsed>.8?"red":memUsed>.6?"yellow":"green";
+  var cpuC=tempCpu&&tempCpu>80?"red":tempCpu&&tempCpu>60?"yellow":"green";
+  var loadC=parseFloat(load?load[0]:0)>2?"red":parseFloat(load?load[0]:0)>1?"yellow":"green";
+  var cpuPct=d.cpu_usage;var cpuPctV=cpuPct?cpuPct.overall:null;var cpuPctC=cpuPctV!=null?(cpuPctV>80?"red":cpuPctV>50?"yellow":"green"):"gray";
+  var perCores=cpuPct&&cpuPct.per_core?Object.keys(cpuPct.per_core).sort().map(function(k){var v=cpuPct.per_core[k];var c=v>80?"red":v>50?"yellow":"green";return '<div class="row" style="padding:2px 0;font-size:12px"><span class="label" style="width:38px;flex-shrink:0">'+k+'</span><div class="bar-bg" style="flex:1;margin:2px 6px 0"><div class="bar-fill" style="width:'+v+'%;background:'+(v>80?"#f87171":v>50?"#facc15":"#4ade80")+'"></div></div><span class="value" style="width:40px;text-align:right;font-size:12px">'+v.toFixed(0)+'%</span></div>';}).join(""):"";
+  var netStr="-";if(net){netStr="&#x2193;"+fmtB(netRx)+" &#x2191;"+fmtB(netTx)}
+  var t=currThresh;var low=cap<t;
+  $('grid').innerHTML=
+  '<div class="card"><h2>&#x1f50b; 电池</h2>'+
+  '<div class="flex"><div class="flex-1"><div class="big-num" style="color:'+capC+'">'+cap+'%</div><div class="big-unit">电量</div>'+
+  '<div class="bar-bg"><div class="bar-fill" style="width:'+cap+'%;background:'+capC+'"></div></div></div>'+
+  '<div class="flex-1"><span class="badge '+batBadge+'">'+(onAc?"&#x1f50c; 充电中":status==="Discharging"?"&#x1f50b; 放电":esc(status))+'</span></div></div>'+
+  '<div class="section"><div class="section-label">功耗</div><div class="row"><span class="label">当前耗电</span><span class="value purple">'+(onAc?'&#x2014; (适配器供电)':pwW.toFixed(2)+' W')+'</span></div>'+(onAc&&usbChg?'<div class="row"><span class="label">适配器能力</span><span class="value blue">'+(usbChg.vol*usbChg.cur).toFixed(0)+' W ('+usbChg.vol.toFixed(0)+'V '+usbChg.cur.toFixed(1)+'A)</span></div>':'')+(onAc?'<div class="row"><span class="label">电池充电</span><span class="value green">'+(curA*volV).toFixed(2)+' W</span></div>':'')+'</div>'+
+  '<div class="section"><div class="section-label">电量</div><div class="row"><span class="label">当前</span><span class="value">'+(cn/1e6).toFixed(3)+' Ah</span></div><div class="row"><span class="label">满充</span><span class="value">'+(cf/1e6).toFixed(3)+'Ah</span></div></div>'+
+  '<div class="section"><div class="section-label">电压 / '+(onAc?'充电':'放电')+'电流</div><div class="row"><span class="label">电压</span><span class="value">'+(volMv/1000).toFixed(3)+' V</span></div><div class="row"><span class="label">电流</span><span class="value">'+(curMa/1000).toFixed(3)+' A ('+curMa.toFixed(0)+' mA)</span></div></div>'+
+  '<div class="section"><div class="section-label">寿命</div><div class="row"><span class="label">循环次数</span><span class="value">'+cycle+'</span></div></div>'+
+  '</div>'+
+  '<div class="card"><h2>&#x1f9ec; CPU</h2>'+
+  '<div class="flex"><div class="flex-1"><div class="big-num" style="color:'+cpuC+'">'+(tempCpu!=null?tempCpu.toFixed(1):"-")+'</div><div class="big-unit">&deg;C (Tctl)</div></div>'+
+  '<div class="flex-1"><div class="big-num blue">'+(freqCpu!=null?freqCpu.toFixed(0):"-")+'</div><div class="big-unit">MHz</div></div></div>'+
+  '<div class="section"><div class="section-label">CPU 使用率</div><div class="row"><span class="label">总体</span><span class="value '+cpuPctC+'">'+(cpuPctV!=null?cpuPctV.toFixed(1)+'%':'-')+'</span></div>'+(perCores?'<div style="margin-top:4px">'+perCores+'</div>':'')+'</div>'+
+  '<div class="section"><div class="section-label">负载均值</div><div class="row"><span class="label">1/5/15 min</span><span class="value '+loadC+'">'+(load?load[0]:"-")+' / '+(load?load[1]:"-")+' / '+(load?load[2]:"-")+'</span></div></div>'+
+  '<div class="section"><div class="section-label">核心数</div><div class="row"><span class="label">逻辑核心</span><span class="value">'+d.cpu_cores+'</span></div></div>'+
+  '<div class="section"><div class="section-label">温度趋势 <span style="color:'+cpuC+'">'+tempCpu.toFixed(0)+'&deg;C</span></div>'+sparkline(downSamp(histCpu,120))+'<div class="chart-labels"><span>'+fmtTime(histTs[0])+'</span><span>'+fmtTime(histTs[histTs.length-1])+'</span></div></div>'+
+  '</div>'+
+  '<div class="card"><h2>&#x1f4be; 内存</h2>'+
+  '<div class="flex"><div class="flex-1"><div class="big-num blue">'+(mem?fmtB(mem.total):"-")+'</div><div class="big-unit">总量</div></div>'+
+  '<div class="flex-1"><div class="big-num" style="color:'+(memC==="green"?"#4ade80":memC==="yellow"?"#facc15":"#f87171")+'">'+(mem?fmtB(mem.total-mem.available):"-")+'</div><div class="big-unit">已用</div></div></div>'+
+  '<div class="section"><div class="section-label">使用率</div><div class="bar-bg"><div class="bar-fill" style="width:'+(mem?fmtPct(memUsed):"0")+';background:'+(memC==="green"?"#4ade80":memC==="yellow"?"#facc15":"#f87171")+'"></div></div></div>'+
+  '<div class="section"><div class="section-label">详情</div><div class="row"><span class="label">可用</span><span class="value green">'+(mem?fmtB(mem.available):"-")+'</span></div><div class="row"><span class="label">缓存</span><span class="value cyan">'+(mem?fmtB(mem.cached):"-")+'</span></div><div class="row"><span class="label">缓冲</span><span class="value purple">'+(mem?fmtB(mem.buffers):"-")+'</span></div></div>'+
+  '<div class="section"><div class="section-label">使用率趋势 <span style="color:'+(memC==="green"?"#4ade80":memC==="yellow"?"#facc15":"#f87171")+'">used '+(mem?fmtPct(memUsed):"-")+'</span></div>'+sparkline(downSamp(histMem.map(function(v){return 1-v;}),120))+'<div class="chart-labels"><span>'+fmtTime(histTs[0])+'</span><span>'+fmtTime(histTs[histTs.length-1])+'</span></div></div>'+
+  '</div>'+
+  '<div class="card"><h2>&#x1f4be; 磁盘</h2>'+
+  (d.disk_usage?d.disk_usage.map(function(u){var uc=u.pct>80?"red":u.pct>60?"yellow":"green";return '<div class="section"><div class="section-label">'+esc(u.mount)+'</div><div class="row"><span class="label">已用</span><span class="value '+uc+'">'+fmtB(u.used)+' / '+fmtB(u.total)+' ('+u.pct+'%)</span></div><div class="bar-bg"><div class="bar-fill" style="width:'+u.pct+'%;background:'+(u.pct>80?"#f87171":u.pct>60?"#facc15":"#4ade80")+'"></div></div><div class="row"><span class="label">可用</span><span class="value green">'+fmtB(u.avail)+'</span></div></div>';}).join(""):'<div class="section"><div class="row"><span class="label">无法读取</span></div></div>')+
+  '<div class="section"><div class="section-label">I/O 累计</div><div class="row"><span class="label">读</span><span class="value">'+fmtB(disk?disk.read:null)+'</span></div><div class="row"><span class="label">写</span><span class="value">'+fmtB(disk?disk.write:null)+'</span></div></div>'+
+  '</div>'+
+  '<div class="card"><h2>&#x1f310; 网络</h2>'+
+  '<div class="section"><div class="row"><span class="label">实时速率</span><span class="value cyan">&#x2193;'+fmtB(dRx)+'/s &#x2191;'+fmtB(dTx)+'/s</span></div></div>'+
+  '<div class="section"><div class="section-label">接收趋势</div>'+sparkline(downSamp(histNetRx,120))+'<div class="chart-labels"><span>'+fmtTime(histTs[0])+'</span><span>'+fmtTime(histTs[histTs.length-1])+'</span></div></div>'+
+  '<div class="section"><div class="section-label">发送趋势</div>'+sparkline(downSamp(histNetTx,120))+'<div class="chart-labels"><span>'+fmtTime(histTs[0])+'</span><span>'+fmtTime(histTs[histTs.length-1])+'</span></div></div>'+
+  '<div class="section"><div class="section-label">接口</div>'+(net?net.map(function(i){return '<div class="row"><span class="label">'+esc(i.ifname)+' '+i.operstate+'</span><span class="value '+(i.operstate==="up"?"green":"gray")+'">&#x2193;'+fmtB(i.rx_bytes||0)+' &#x2191;'+fmtB(i.tx_bytes||0)+'</span></div>'}).join(""):"-")+'</div>'+
+  '</div>'+
+
+  '<div class="card"><h2>&#x1f514; 低电量提醒</h2>'+
+  '<div class="section"><div class="row"><span class="label">阈值</span><span class="value"><input type="number" id="threshInput" value="'+t+'" min="5" max="95" onchange="updateThresh()"><span class="value" style="font-size:12px;color:#64748b"> %</span></span></div>'+
+  '<div class="row"><span class="label">当前电量</span><span class="value '+(low?'red':'green')+'">'+cap+'% '+(low?'&#x26a0; 低于阈值':'&#x2705; 正常')+'</span></div>'+
+  '<div class="row"><span class="label">通知方式</span><span class="value">Webhook (power-alert)</span></div>'+
+  '</div></div>';
+  $('footer').textContent="更新于 "+new Date().toLocaleTimeString("zh-CN");
+  // Re-show file content card if open
+  if(!$('fileContent').classList.contains('hidden')){}
+}
+fetch('/api/history').then(function(r){return r.json()}).then(function(h){
+  if(h&&h.length){
+    for(var i=0;i<h.length;i++){
+      var e=h[i];histTs.push(e.ts*1000);histCpu.push(e.cpu_temp);histMem.push(e.mem_used);histLoad.push(e.load1);
+      if(i>0&&e.net_rx_raw!=null&&h[i-1].net_rx_raw!=null){histNetRx.push(Math.max(0,e.net_rx_raw-h[i-1].net_rx_raw))}else{histNetRx.push(0)}
+      if(i>0&&e.net_tx_raw!=null&&h[i-1].net_tx_raw!=null){histNetTx.push(Math.max(0,e.net_tx_raw-h[i-1].net_tx_raw))}else{histNetTx.push(0)}
+      if(e.net_rx_raw!=null){lastNetRx=e.net_rx_raw}if(e.net_tx_raw!=null){lastNetTx=e.net_tx_raw}
+    }
+    if(histTs.length>maxPts){histTs=histTs.slice(-maxPts);histCpu=histCpu.slice(-maxPts);histMem=histMem.slice(-maxPts);histLoad=histLoad.slice(-maxPts);histNetRx=histNetRx.slice(-maxPts);histNetTx=histNetTx.slice(-maxPts)}
+  }
+  fetchStats();setInterval(fetchStats,3000);
+});
+</script>
+</body></html>
