@@ -72,6 +72,7 @@ var histMem=[],histCpu=[],histLoad=[],histNetRx=[],histNetTx=[],histTs=[],maxPts
 var lastNetRx=0,lastNetTx=0;
 var currDir="/home/hbpc";
 var currThresh=parseInt(localStorage.getItem('battThreshold')||'20');
+var cfg={};
 function $(id){return document.getElementById(id)}
 function esc(s){return s?String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"):""}
 function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v))}
@@ -209,7 +210,7 @@ function viewFile(name){
     showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px">'+esc(pv)+'</pre><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
   });
 }
-function updateThresh(){currThresh=$('threshInput').value;localStorage.setItem('battThreshold',currThresh);}
+function updateThresh(){var v=$('threshInput').value;currThresh=v;localStorage.setItem('battThreshold',v);cfg.THRESHOLD=v;fetch('/api/config',{method:'POST',body:JSON.stringify(cfg),headers:{'Content-Type':'application/json'}}).then(function(r){return r.json()});}
 async function fetchStats(){
   try{
     var r=await fetch("/api/stats");
@@ -217,6 +218,8 @@ async function fetchStats(){
     render(d);
   }catch(e){}
 }
+function saveCfg(){fetch('/api/config',{method:'POST',body:JSON.stringify(cfg),headers:{'Content-Type':'application/json'}}).then(function(r){return r.json()}).then(function(d){if(d.ok){}})}
+
 function render(d){
   var bat=d.batteries[0],ac=d.ac[0],onAc=ac&&ac.POWER_SUPPLY_ONLINE==="1";
   var cap=parseInt(bat?.POWER_SUPPLY_CAPACITY)||0;
@@ -280,13 +283,20 @@ function render(d){
   '<div class="card"><h2>&#x1f514; 低电量提醒</h2>'+
   '<div class="section"><div class="row"><span class="label">阈值</span><span class="value"><input type="number" id="threshInput" value="'+t+'" min="5" max="95" onchange="updateThresh()"><span class="value" style="font-size:12px;color:#64748b"> %</span></span></div>'+
   '<div class="row"><span class="label">当前电量</span><span class="value '+(low?'red':'green')+'">'+cap+'% '+(low?'&#x26a0; 低于阈值':'&#x2705; 正常')+'</span></div>'+
-  '<div class="row"><span class="label">通知方式</span><span class="value">Webhook (power-alert)</span></div>'+
+  '<div class="row"><span class="label">Webhook</span><span class="value" style="font-size:11px;color:#64748b">'+(cfg.WEBHOOK_URL?(cfg.WEBHOOK_URL.length>35?cfg.WEBHOOK_URL.slice(0,35)+'...':cfg.WEBHOOK_URL):'未配置')+'</span></div>'+
+  '<hr style="border-color:#334155;margin:8px 0">'+
+  '<div class="section-label">Tasmota 智能插座控制</div>'+
+  '<div class="row"><span class="label">启用</span><span class="value"><input type="checkbox" id="wsEnable" '+(cfg.WEBSEND_ENABLED==='true'?'checked':'')+' onchange="cfg.WEBSEND_ENABLED=this.checked?'true':'false';saveCfg()"></span></div>'+
+  '<div class="row"><span class="label">URL</span><span class="value"><input id="wsUrl" value="'+esc(cfg.WEBSEND_URL||'')+'" style="width:180px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_URL=this.value;saveCfg()"></span></div>'+
+  '<div class="row"><span class="label">低电量</span><span class="value">&#x2264; <input id="wsLow" type="number" value="'+cfg.WEBSEND_LOW+'" min="5" max="95" style="width:45px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_LOW=this.value;saveCfg()"> % &#x2192; <input id="wsOnCmd" value="'+esc(cfg.WEBSEND_CMD_ON||'')+'" style="width:100px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_CMD_ON=this.value;saveCfg()"></span></div>'+
+  '<div class="row"><span class="label">高电量</span><span class="value">&#x2265; <input id="wsHigh" type="number" value="'+cfg.WEBSEND_HIGH+'" min="5" max="95" style="width:45px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_HIGH=this.value;saveCfg()"> % &#x2192; <input id="wsOffCmd" value="'+esc(cfg.WEBSEND_CMD_OFF||'')+'" style="width:100px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_CMD_OFF=this.value;saveCfg()"></span></div>'+
   '</div></div>';
   $('footer').textContent="更新于 "+new Date().toLocaleTimeString("zh-CN");
   // Re-show file content card if open
   if(!$('fileContent').classList.contains('hidden')){}
 }
-fetch('/api/history').then(function(r){return r.json()}).then(function(h){
+var pCfg=fetch('/api/config').then(function(r){return r.json()}).then(function(c){cfg=c;currThresh=parseInt(c.THRESHOLD||'20');localStorage.setItem('battThreshold',currThresh);});
+var pHist=fetch('/api/history').then(function(r){return r.json()}).then(function(h){
   if(h&&h.length){
     for(var i=0;i<h.length;i++){
       var e=h[i];histTs.push(e.ts*1000);histCpu.push(e.cpu_temp);histMem.push(e.mem_used);histLoad.push(e.load1);
@@ -298,5 +308,6 @@ fetch('/api/history').then(function(r){return r.json()}).then(function(h){
   }
   fetchStats();setInterval(fetchStats,3000);
 });
+Promise.all([pCfg,pHist]).then(function(){fetchStats();setInterval(fetchStats,3000);});
 </script>
 </body></html>

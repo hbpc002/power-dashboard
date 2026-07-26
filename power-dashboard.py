@@ -248,6 +248,38 @@ def get_network():
     except: return None
 
 _history = deque(maxlen=2400)
+CONF = os.path.expanduser("~/.battery-monitor.conf")
+CONF_DEFAULTS = {
+    "THRESHOLD": "20",
+    "WEBHOOK_URL": "http://192.168.1.114:8644/webhooks/power-alert",
+    "WEBHOOK_SECRET": "",
+    "WEBSEND_ENABLED": "false",
+    "WEBSEND_URL": "",
+    "WEBSEND_LOW": "20",
+    "WEBSEND_HIGH": "80",
+    "WEBSEND_CMD_ON": "Power%20ON",
+    "WEBSEND_CMD_OFF": "Power%20OFF",
+}
+
+def read_config():
+    cfg = dict(CONF_DEFAULTS)
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k] = v
+    except: pass
+    return cfg
+
+def write_config(cfg):
+    try:
+        with open(CONF, "w") as f:
+            for k in CONF_DEFAULTS:
+                f.write(f"{k}={cfg.get(k, CONF_DEFAULTS[k])}\n")
+        return True
+    except: return False
 
 def push_history(stats):
     net = stats.get("network")
@@ -284,6 +316,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json(d)
         elif p == "/api/history":
             self.send_json(list(_history))
+        elif p == "/api/config":
+            self.send_json(read_config())
         elif p == "/api/files":
             fp = ps.get("path", ["/home/hbpc"])[0]
             act = ps.get("action", ["list"])[0]
@@ -318,6 +352,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json(write_file(ps["file"][0], body))
         elif p == "/api/files" and ps.get("action", [""])[0] == "upload" and "file" in ps:
             self._handle_upload()
+        elif p == "/api/config":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            self.send_json({"ok": write_config(body)})
         else:
             self.send_error(400, "Invalid request")
     def _handle_upload(self):
