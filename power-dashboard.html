@@ -47,6 +47,12 @@ input[type=number]{background:#334155;color:#e2e8f0;border:1px solid #475569;bor
 #fileTab.active{display:block}
 #statsTab.active{display:block}
 .link{color:#60a5fa;cursor:pointer;text-decoration:underline}
+.fav-chip{display:inline-flex;align-items:center;gap:6px;background:#334155;border:1px solid #475569;border-radius:16px;padding:4px 10px;cursor:pointer;font-size:12px;margin:2px 4px 2px 0;max-width:260px}
+.fav-chip:hover{background:#475569}
+.fav-chip .fname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fav-chip .x{color:#f87171;cursor:pointer;font-weight:700;flex-shrink:0}
+.star-btn{background:transparent;border:1px solid #a78bfa;color:#a78bfa;border-radius:4px;padding:2px 10px;cursor:pointer;font-size:12px;margin-left:10px;flex-shrink:0}
+.star-btn.active{background:#a78bfa;color:#fff}
 </style>
 </head>
 <body>
@@ -57,11 +63,15 @@ input[type=number]{background:#334155;color:#e2e8f0;border:1px solid #475569;bor
 </div>
 <div id="statsTab" class="tab-content active">
 <div class="grid" id="grid"></div>
+<div class="grid" id="configGrid" style="max-width:1100px;margin:16px auto 0"></div>
 </div>
 <div id="fileTab" class="tab-content">
 <div class="card" style="max-width:1100px;margin:0 auto">
 <h2>&#x1f4c1; 文件浏览器</h2>
-<div class="section"><div class="row"><span class="label">路径</span><span class="value" style="word-break:break-all" id="filePath">/home/hbpc</span></div></div>
+<div id="favBar" class="section hidden"></div>
+<div class="section"><div class="row"><span class="label">路径</span><span class="value" style="word-break:break-all;flex:1" id="filePath">/home/hbpc</span><button id="favBtn" class="star-btn" onclick="toggleFav()">&#x2606; 收藏</button></div></div>
+<div class="section"><div class="row" style="flex-wrap:wrap"><span class="label">搜索</span><input id="searchInput" type="text" placeholder="输入即过滤当前目录，回车递归搜索" style="flex:1;min-width:200px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:4px 8px;font-size:13px" oninput="liveFilter()" onkeydown="if(event.key==='Enter')doSearch()"><button onclick="doSearch()" style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:4px 14px;cursor:pointer;margin-left:8px">&#x1f50d; 搜索</button><button id="clearSearchBtn" class="del-btn hidden" onclick="clearSearch()">清除</button></div></div>
+<div id="searchResults" class="section hidden"></div>
 <div id="fileList"><div class="row"><span class="label">加载中...</span></div></div>
 <div id="fileContent" class="hidden"></div>
 </div>
@@ -72,6 +82,11 @@ var histMem=[],histCpu=[],histLoad=[],histNetRx=[],histNetTx=[],histTs=[],maxPts
 var lastNetRx=0,lastNetTx=0;
 var currDir="/home/hbpc";
 var currThresh=parseInt(localStorage.getItem('battThreshold')||'20');
+var cfg={};
+var favs=[];
+var searchRes=[];
+var curEntries=[],curPath="";
+function qjs(s){return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'")}
 function $(id){return document.getElementById(id)}
 function esc(s){return s?String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"):""}
 function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v))}
@@ -93,12 +108,53 @@ function switchTab(tab){
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active')});
   document.querySelectorAll('.tab-content').forEach(function(t){t.classList.remove('active')});
   if(tab==='stats'){document.querySelectorAll('.tab-btn')[0].classList.add('active');$('statsTab').classList.add('active')}
-  else{document.querySelectorAll('.tab-btn')[1].classList.add('active');$('fileTab').classList.add('active');listFiles(currDir)}
+  else{document.querySelectorAll('.tab-btn')[1].classList.add('active');$('fileTab').classList.add('active');listFiles(currDir);loadFavs()}
+}
+function loadFavs(){
+  fetch('/api/favorites').then(function(r){return r.json()}).then(function(d){
+    favs=d.favorites||[];
+    renderFavBar();updateFavBtn();
+  });
+}
+function renderFavBar(){
+  var el=$('favBar');
+  if(!favs.length){el.classList.add('hidden');el.innerHTML='';return;}
+  el.classList.remove('hidden');
+  var html='<div class="section-label">&#x2b50; 收藏文件夹</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">';
+  favs.forEach(function(p,i){
+    html+='<span class="fav-chip" title="'+esc(p)+'" onclick="jumpToFav('+i+')"><span class="fname">&#x1f4c1; '+esc(p)+'</span><span class="x" onclick="event.stopPropagation();removeFav('+i+')">&#x00d7;</span></span>';
+  });
+  html+='</div>';
+  el.innerHTML=html;
+}
+function jumpToFav(i){
+  var p=favs[i];if(!p)return;
+  currDir=p;$('filePath').textContent=p;clearSearch();listFiles(p);
+}
+function toggleFav(){
+  var p=currDir;
+  var action=favs.indexOf(p)>=0?'remove':'add';
+  fetch('/api/favorites?path='+encodeURIComponent(p),{method:'POST',body:JSON.stringify({action:action}),headers:{'Content-Type':'application/json'}}).then(function(r){return r.json()}).then(function(d){
+    favs=d.favorites||favs;
+    renderFavBar();updateFavBtn();
+  });
+}
+function removeFav(i){
+  var p=favs[i];if(!p)return;
+  fetch('/api/favorites?path='+encodeURIComponent(p),{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){
+    favs=d.favorites||favs;
+    renderFavBar();updateFavBtn();
+  });
+}
+function updateFavBtn(){
+  var b=$('favBtn');var on=favs.indexOf(currDir)>=0;
+  b.className='star-btn'+(on?' active':'');
+  b.innerHTML=on?'&#x2605; 已收藏':'&#x2606; 收藏';
 }
 function navDir(dir){
   if(dir==='..'){var p=currDir.split('/');if(p.length>2)currDir=p.slice(0,-1).join('/')||'/';}
   else{currDir=currDir.replace(/\/$/,'')+'/'+dir;}
-  $('filePath').textContent=currDir;listFiles(currDir);
+  $('filePath').textContent=currDir;clearSearch();listFiles(currDir);
 }
 function getExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(i).toLowerCase():''}
 function getFileIcon(e){
@@ -110,19 +166,36 @@ function getFileIcon(e){
   if(ex.match(/\.(txt|log|py|sh|json|html|css|js|xml|yaml|yml|csv|md|conf)$/))return '&#x1f4dd;';
   return '&#x1f4c4;';
 }
+function renderFileList(path,entries){
+  var html='<div class="row" style="padding:4px 0;flex-wrap:wrap;gap:4px"><label style="cursor:pointer"><input type="checkbox" id="selAll" onchange="toggleAll(this)"> 全选</label> <button class="del-btn" onclick="batchDel()">&#x1f5d1; 删除选中</button> <label class="del-btn" style="background:#2563eb;color:#fff;border:none;cursor:pointer">&#x1f4c4; 上传文件<input type="file" id="uploadInput" multiple style="display:none" onchange="uploadFiles(this.files)"></label></div><div class="row" style="font-size:11px;color:#475569;padding:2px 0"><span style="flex:1;margin-left:22px">名称</span><span style="width:80px;text-align:right">修改日期</span><span style="width:70px;text-align:right">大小</span></div>';
+  if(path!=='/'){html+='<div class="file-row" onclick="navDir(\'..\')"><span class="label">&#x2B05; ..</span><span class="value">-</span></div>';}
+  var q=$('searchInput').value.trim().toLowerCase();
+  if(q&&entries.length){
+    html+='<div class="row" style="font-size:11px;color:#facc15;padding:2px 0"><span class="label">匹配 '+entries.length+' 项</span></div>';
+  }
+  entries.forEach(function(e){
+    var icon=getFileIcon(e);
+    var n=esc(e.name);var sz=e.is_dir?'-':fmtB(e.size);
+    var a=e.is_dir?"navDir('"+e.name+"')":"viewFile('"+e.name+"')";
+    html+='<div class="file-row" style="display:flex;align-items:center"><input type="checkbox" class="sel-item" value="'+n+'" style="margin-right:6px" onclick="event.stopPropagation()"><span class="label" onclick="'+a+'" style="cursor:pointer;flex:1">'+icon+' '+n+'</span><span class="value" style="font-size:11px;color:#64748b;width:80px;text-align:right">'+fmtDate(e.mtime)+'</span><span class="value" style="width:70px;text-align:right">'+sz+'</span></div>';
+  });
+  if(!entries.length){
+    html+='<div class="file-row"><span class="label">'+(q?'未找到匹配项':'（空目录）')+'</span></div>';
+  }
+  $('fileList').innerHTML=html;$('fileContent').classList.add('hidden');updateFavBtn();
+}
+function liveFilter(){
+  var q=$('searchInput').value.trim().toLowerCase();
+  if(!q){if(!curEntries.length)return;renderFileList(curPath||currDir,curEntries);return;}
+  var f=curEntries.filter(function(e){return e.name.toLowerCase().indexOf(q)>=0});
+  renderFileList(curPath||currDir,f);
+}
 function listFiles(path){
   $('fileList').innerHTML='<div class="row"><span class="label">加载中...</span></div>';
   fetch('/api/files?path='+encodeURIComponent(path)).then(function(r){return r.json()}).then(function(data){
     if(!data||!data.entries){$('fileList').innerHTML="<div class='row'><span class='label'>无法访问</span></div>";return;}
-    var html='<div class="row" style="padding:4px 0;flex-wrap:wrap;gap:4px"><label style="cursor:pointer"><input type="checkbox" id="selAll" onchange="toggleAll(this)"> 全选</label> <button class="del-btn" onclick="batchDel()">&#x1f5d1; 删除选中</button> <label class="del-btn" style="background:#2563eb;color:#fff;border:none;cursor:pointer">&#x1f4c4; 上传文件<input type="file" id="uploadInput" multiple style="display:none" onchange="uploadFiles(this.files)"></label></div><div class="row" style="font-size:11px;color:#475569;padding:2px 0"><span style="flex:1;margin-left:22px">名称</span><span style="width:80px;text-align:right">修改日期</span><span style="width:70px;text-align:right">大小</span></div>';
-    if(data.path!=='/'){html+='<div class="file-row" onclick="navDir(\'..\')"><span class="label">&#x2B05; ..</span><span class="value">-</span></div>';}
-    data.entries.forEach(function(e){
-      var icon=getFileIcon(e);
-      var n=esc(e.name);var sz=e.is_dir?'-':fmtB(e.size);
-      var a=e.is_dir?"navDir('"+e.name+"')":"viewFile('"+e.name+"')";
-      html+='<div class="file-row" style="display:flex;align-items:center"><input type="checkbox" class="sel-item" value="'+n+'" style="margin-right:6px" onclick="event.stopPropagation()"><span class="label" onclick="'+a+'" style="cursor:pointer;flex:1">'+icon+' '+n+'</span><span class="value" style="font-size:11px;color:#64748b;width:80px;text-align:right">'+fmtDate(e.mtime)+'</span><span class="value" style="width:70px;text-align:right">'+sz+'</span></div>';
-    });
-    $('fileList').innerHTML=html;$('fileContent').classList.add('hidden');
+    curPath=path;curEntries=data.entries;
+    renderFileList(path,curEntries);
   });
 }
 function toggleAll(cb){document.querySelectorAll('.sel-item').forEach(function(e){e.checked=cb.checked;});}
@@ -156,41 +229,42 @@ function showPreview(html){
   $('fileContent').innerHTML=html;
   setTimeout(function(){$('fileContent').scrollIntoView({behavior:'smooth',block:'nearest'});},100);
 }
-function deleteFile(name){
-  if(!confirm('确认删除 '+name+' ？'))return;
-  var p=currDir+'/'+name;
+function deleteFullPath(p){
+  if(!confirm('确认删除 '+p+' ？'))return;
   fetch('/api/files?file='+encodeURIComponent(p),{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){
     if(d.ok){listFiles(currDir);$('fileContent').classList.add('hidden');}
     else{alert('删除失败: '+d.error);}
   });
 }
-function saveFile(name){
+function deleteFile(name){deleteFullPath(currDir+'/'+name)}
+function saveFullPath(p){
   var body=$('editArea').value;
-  var p=currDir+'/'+name;
   fetch('/api/files?action=save&file='+encodeURIComponent(p),{method:'POST',body:body}).then(function(r){return r.json()}).then(function(d){
     if(d.ok){alert('保存成功');$('fileContent').classList.add('hidden');listFiles(currDir);}
     else{alert('保存失败: '+d.error);}
   });
 }
-function viewFile(name){
-  var p=currDir+'/'+name;var ex=getExt(name);
+function saveFile(name){saveFullPath(currDir+'/'+name)}
+function viewFile(name){viewFullPath(currDir+'/'+name)}
+function viewFullPath(p){
+  var name=p.split('/').pop();var ex=getExt(name);var np=qjs(p);
   var isImg=!!ex.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/);
   var isAudio=!!ex.match(/\.(mp3|wav|ogg|flac|aac)$/);
   var isVideo=!!ex.match(/\.(mp4|webm|avi|mkv|mov)$/);
   var isText=!!ex.match(/\.(txt|log|py|sh|json|html|css|js|xml|yaml|yml|csv|md|conf|yaml)$/)||!ex;
   if(isImg){
     var src='/api/files?action=serve&file='+encodeURIComponent(p);
-    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><img src="'+src+'" style="max-width:100%;max-height:400px;border-radius:8px;display:block;margin:8px 0" onerror="this.style.display=\'none\'"><div class="row"><span class="label"></span><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><img src="'+src+'" style="max-width:100%;max-height:400px;border-radius:8px;display:block;margin:8px 0" onerror="this.style.display=\'none\'"><div class="row"><span class="label"></span><button class="del-btn" onclick="deleteFullPath(\''+np+'\')">&#x1f5d1; 删除</button></div></div>');
     return;
   }
   if(isAudio){
     var src='/api/files?action=serve&file='+encodeURIComponent(p);
-    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><audio controls style="width:100%;margin:8px 0"><source src="'+src+'"></audio><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><audio controls style="width:100%;margin:8px 0"><source src="'+src+'"></audio><div class="row"><button class="del-btn" onclick="deleteFullPath(\''+np+'\')">&#x1f5d1; 删除</button></div></div>');
     return;
   }
   if(isVideo){
     var src='/api/files?action=serve&file='+encodeURIComponent(p);
-    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><video controls style="max-width:100%;max-height:400px;margin:8px 0;border-radius:8px"><source src="'+src+'"></video><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><video controls style="max-width:100%;max-height:400px;margin:8px 0;border-radius:8px"><source src="'+src+'"></video><div class="row"><button class="del-btn" onclick="deleteFullPath(\''+np+'\')">&#x1f5d1; 删除</button></div></div>');
     return;
   }
   if(isText){
@@ -198,18 +272,41 @@ function viewFile(name){
       if(!data||data.content===undefined){showPreview('<div class="row"><span class="label">无法读取</span></div>');return;}
       var cont=data.content;
       if(data.truncated)cont+='\n...(截断，共'+data.total_lines+'行)';
-      showPreview('<div class="section"><div class="section-label">'+esc(name)+' ('+fmtB(data.content.length)+') <a class="link" onclick="this.parentNode.nextElementSibling.style.display=(this.parentNode.nextElementSibling.style.display==\'none\'?\'block\':\'none\')">&#x270f; 编辑</a></div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px;color:#e2e8f0">'+esc(cont)+'</pre><textarea id="editArea" style="display:none;width:100%;height:200px;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:8px;padding:10px;font-size:13px;font-family:monospace;margin-top:8px">'+esc(data.content)+'</textarea><div class="row" style="margin-top:4px"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button><button onclick="saveFile(\''+name+'\')" style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer">&#x1f4be; 保存</button></div></div>');
+      showPreview('<div class="section"><div class="section-label">'+esc(name)+' ('+fmtB(data.content.length)+') <a class="link" onclick="this.parentNode.nextElementSibling.style.display=(this.parentNode.nextElementSibling.style.display==\'none\'?\'block\':\'none\')">&#x270f; 编辑</a></div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px;color:#e2e8f0">'+esc(cont)+'</pre><textarea id="editArea" style="display:none;width:100%;height:200px;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:8px;padding:10px;font-size:13px;font-family:monospace;margin-top:8px">'+esc(data.content)+'</textarea><div class="row" style="margin-top:4px"><button class="del-btn" onclick="deleteFullPath(\''+np+'\')">&#x1f5d1; 删除</button><button onclick="saveFullPath(\''+np+'\')" style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer">&#x1f4be; 保存</button></div></div>');
     });
     return;
   }
   fetch('/api/files?action=read&file='+encodeURIComponent(p)).then(function(r){return r.json()}).then(function(d){
-    if(!d||d.content===undefined){showPreview('<div class="row"><span class="label">无法预览</span><span class="value"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></span></div>');return;}
+    if(!d||d.content===undefined){showPreview('<div class="row"><span class="label">无法预览</span><span class="value"><button class="del-btn" onclick="deleteFullPath(\''+np+'\')">&#x1f5d1; 删除</button></span></div>');return;}
     var l=d.content.split('\n');var pv=l.slice(0,50).join('\n');
     if(d.truncated)pv+='\n...(截断)';
-    showPreview('<div class="section"><div class="section-label">'+esc(name)+'</div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px">'+esc(pv)+'</pre><div class="row"><button class="del-btn" onclick="deleteFile(\''+name+'\')">&#x1f5d1; 删除</button></div></div>');
+    showPreview('<div class="section"><div class="section-label">'+esc(p)+'</div><pre style="white-space:pre-wrap;font-size:12px;max-height:300px;overflow:auto;background:#0f172a;padding:10px;border-radius:8px">'+esc(pv)+'</pre><div class="row"><button class="del-btn" onclick="deleteFullPath(\''+np+'\')">&#x1f5d1; 删除</button></div></div>');
   });
 }
-function updateThresh(){currThresh=$('threshInput').value;localStorage.setItem('battThreshold',currThresh);}
+function doSearch(){
+  var q=$('searchInput').value.trim();
+  if(!q)return;
+  var base=currDir;
+  $('searchResults').classList.remove('hidden');
+  $('clearSearchBtn').classList.remove('hidden');
+  $('searchResults').innerHTML='<div class="row"><span class="label">搜索中...</span></div>';
+  fetch('/api/search?q='+encodeURIComponent(q)+'&path='+encodeURIComponent(base)).then(function(r){return r.json()}).then(function(d){
+    if(!d||!d.results){$('searchResults').innerHTML="<div class='row'><span class='label'>无法搜索</span></div>";return;}
+    searchRes=d.results;
+    var html='<div class="section-label">在 '+esc(base)+' 下找到 '+searchRes.length+' 个结果'+(d.truncated?'（已截断）':'')+(d.timed_out?'（已超时停止）':'')+'，关键词: '+esc(q)+'</div>';
+    if(!searchRes.length)html+="<div class='row'><span class='label'>未找到匹配项</span></div>";
+    searchRes.forEach(function(e,i){
+      var icon=getFileIcon(e);
+      var fn=e.is_dir?'searchNav':'searchOpen';
+      html+='<div class="file-row" style="display:flex;align-items:center;cursor:pointer" onclick="'+fn+'('+i+')"><span class="label" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(e.full)+'">'+icon+' '+esc(e.rel)+'</span><span class="value" style="font-size:11px;color:#64748b;width:70px;text-align:right">'+(e.is_dir?'-':fmtB(e.size))+'</span></div>';
+    });
+    $('searchResults').innerHTML=html;
+  });
+}
+function searchOpen(i){var e=searchRes[i];if(!e)return;viewFullPath(e.full);}
+function searchNav(i){var e=searchRes[i];if(!e)return;currDir=e.full;$('filePath').textContent=e.full;clearSearch();listFiles(currDir);}
+function clearSearch(){$('searchInput').value='';$('searchResults').classList.add('hidden');$('searchResults').innerHTML='';$('clearSearchBtn').classList.add('hidden');}
+function updateThresh(){var v=$('threshInput').value;currThresh=v;localStorage.setItem('battThreshold',v);cfg.THRESHOLD=v;fetch('/api/config',{method:'POST',body:JSON.stringify(cfg),headers:{'Content-Type':'application/json'}}).then(function(r){return r.json()});}
 async function fetchStats(){
   try{
     var r=await fetch("/api/stats");
@@ -217,6 +314,34 @@ async function fetchStats(){
     render(d);
   }catch(e){}
 }
+function saveCfg(){fetch('/api/config',{method:'POST',body:JSON.stringify(cfg),headers:{'Content-Type':'application/json'}}).then(function(r){return r.json()}).then(function(d){if(d.ok){}})}
+function testWebsend(onoff){
+  var url=cfg.WEBSEND_URL;var cmd=onoff?cfg.WEBSEND_CMD_ON:cfg.WEBSEND_CMD_OFF;
+  if(!url)return;
+  var btn=event&&event.target;var txt=btn?btn.textContent:'';
+  if(btn){btn.textContent='已发送';btn.style.opacity='0.6';btn.disabled=true}
+  var full=url+(url.indexOf('?')>=0?'&':'?')+'cmnd='+cmd;
+  fetch(full,{mode:'no-cors'}).catch(function(){}).then(function(){
+    setTimeout(function(){if(btn){btn.textContent=txt;btn.style.opacity='1';btn.disabled=false}},1500);
+  });
+}
+
+function renderCfg(){
+  var t=parseInt(cfg.THRESHOLD||'20');
+  $('configGrid').innerHTML=
+  '<div class="card"><h2>&#x1f514; 低电量提醒</h2>'+
+  '<div class="section"><div class="row"><span class="label">阈值</span><span class="value"><input type="number" id="threshInput" value="'+t+'" min="5" max="95" onchange="updateThresh()"><span class="value" style="font-size:12px;color:#64748b"> %</span></span></div>'+
+  '<div class="row" id="capRow"><span class="label">当前电量</span><span class="value" id="capVal">-%</span></div>'+
+  '<div class="row"><span class="label">Webhook</span><span class="value"><input id="whUrl" value="'+esc(cfg.WEBHOOK_URL||'')+'" placeholder="例: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" style="width:300px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBHOOK_URL=this.value;saveCfg()"></span></div>'+
+  '<hr style="border-color:#334155;margin:8px 0">'+
+  '<div class="section-label">Tasmota 智能插座控制</div>'+
+  '<div class="row"><span class="label">启用</span><span class="value"><input type="checkbox" id="wsEnable" '+(cfg.WEBSEND_ENABLED==='true'?'checked':'')+' onchange="cfg.WEBSEND_ENABLED=this.checked?&apos;true&apos;:&apos;false&apos;;saveCfg()"></span></div>'+
+  '<div class="row"><span class="label">URL</span><span class="value"><input id="wsUrl" value="'+esc(cfg.WEBSEND_URL||'')+'" placeholder="例: http://192.168.1.24/cm" style="width:200px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_URL=this.value;saveCfg()"></span></div>'+
+  '<div class="row"><span class="label">低电量</span><span class="value">&#x2264; <input id="wsLow" type="number" value="'+cfg.WEBSEND_LOW+'" min="5" max="95" style="width:45px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_LOW=this.value;saveCfg()"> % &#x2192; <input id="wsOnCmd" value="'+esc(cfg.WEBSEND_CMD_ON||'')+'" placeholder="例: Power%20ON" style="width:90px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_CMD_ON=this.value;saveCfg()"> <button onclick="testWebsend(1)" style="background:#4ade80;color:#000;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">&#x25b6; 测试开</button></span></div>'+
+  '<div class="row"><span class="label">高电量</span><span class="value">&#x2265; <input id="wsHigh" type="number" value="'+cfg.WEBSEND_HIGH+'" min="5" max="95" style="width:45px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_HIGH=this.value;saveCfg()"> % &#x2192; <input id="wsOffCmd" value="'+esc(cfg.WEBSEND_CMD_OFF||'')+'" placeholder="例: Power%20OFF" style="width:90px;background:#334155;color:#e2e8f0;border:1px solid #475569;border-radius:4px;padding:2px 4px;font-size:12px" onchange="cfg.WEBSEND_CMD_OFF=this.value;saveCfg()"> <button onclick="testWebsend(0)" style="background:#f87171;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">&#x25b6; 测试关</button></span></div>'+
+  '</div></div>';
+}
+
 function render(d){
   var bat=d.batteries[0],ac=d.ac[0],onAc=ac&&ac.POWER_SUPPLY_ONLINE==="1";
   var cap=parseInt(bat?.POWER_SUPPLY_CAPACITY)||0;
@@ -240,7 +365,7 @@ function render(d){
   var cpuPct=d.cpu_usage;var cpuPctV=cpuPct?cpuPct.overall:null;var cpuPctC=cpuPctV!=null?(cpuPctV>80?"red":cpuPctV>50?"yellow":"green"):"gray";
   var perCores=cpuPct&&cpuPct.per_core?Object.keys(cpuPct.per_core).sort().map(function(k){var v=cpuPct.per_core[k];var c=v>80?"red":v>50?"yellow":"green";return '<div class="row" style="padding:2px 0;font-size:12px"><span class="label" style="width:38px;flex-shrink:0">'+k+'</span><div class="bar-bg" style="flex:1;margin:2px 6px 0"><div class="bar-fill" style="width:'+v+'%;background:'+(v>80?"#f87171":v>50?"#facc15":"#4ade80")+'"></div></div><span class="value" style="width:40px;text-align:right;font-size:12px">'+v.toFixed(0)+'%</span></div>';}).join(""):"";
   var netStr="-";if(net){netStr="&#x2193;"+fmtB(netRx)+" &#x2191;"+fmtB(netTx)}
-  var t=currThresh;var low=cap<t;
+  var t=cfg.THRESHOLD||'20';var low=cap<t;
   $('grid').innerHTML=
   '<div class="card"><h2>&#x1f50b; 电池</h2>'+
   '<div class="flex"><div class="flex-1"><div class="big-num" style="color:'+capC+'">'+cap+'%</div><div class="big-unit">电量</div>'+
@@ -277,16 +402,15 @@ function render(d){
   '<div class="section"><div class="section-label">接口</div>'+(net?net.map(function(i){return '<div class="row"><span class="label">'+esc(i.ifname)+' '+i.operstate+'</span><span class="value '+(i.operstate==="up"?"green":"gray")+'">&#x2193;'+fmtB(i.rx_bytes||0)+' &#x2191;'+fmtB(i.tx_bytes||0)+'</span></div>'}).join(""):"-")+'</div>'+
   '</div>'+
 
-  '<div class="card"><h2>&#x1f514; 低电量提醒</h2>'+
-  '<div class="section"><div class="row"><span class="label">阈值</span><span class="value"><input type="number" id="threshInput" value="'+t+'" min="5" max="95" onchange="updateThresh()"><span class="value" style="font-size:12px;color:#64748b"> %</span></span></div>'+
-  '<div class="row"><span class="label">当前电量</span><span class="value '+(low?'red':'green')+'">'+cap+'% '+(low?'&#x26a0; 低于阈值':'&#x2705; 正常')+'</span></div>'+
-  '<div class="row"><span class="label">通知方式</span><span class="value">Webhook (power-alert)</span></div>'+
-  '</div></div>';
+  '</div>';
+  // Update live status in config card
+  var capEl=$('capVal');if(capEl){var low=cap<t;capEl.className='value '+(low?'red':'green');capEl.innerHTML=cap+'% '+(low?'&#x26a0; 低于阈值':'&#x2705; 正常');}
   $('footer').textContent="更新于 "+new Date().toLocaleTimeString("zh-CN");
   // Re-show file content card if open
   if(!$('fileContent').classList.contains('hidden')){}
 }
-fetch('/api/history').then(function(r){return r.json()}).then(function(h){
+var pCfg=fetch('/api/config').then(function(r){return r.json()}).then(function(c){cfg=c;currThresh=parseInt(c.THRESHOLD||'20');localStorage.setItem('battThreshold',currThresh);});
+var pHist=fetch('/api/history').then(function(r){return r.json()}).then(function(h){
   if(h&&h.length){
     for(var i=0;i<h.length;i++){
       var e=h[i];histTs.push(e.ts*1000);histCpu.push(e.cpu_temp);histMem.push(e.mem_used);histLoad.push(e.load1);
@@ -298,5 +422,6 @@ fetch('/api/history').then(function(r){return r.json()}).then(function(h){
   }
   fetchStats();setInterval(fetchStats,3000);
 });
+Promise.all([pCfg,pHist]).then(function(){renderCfg();fetchStats();setInterval(fetchStats,3000);});
 </script>
 </body></html>

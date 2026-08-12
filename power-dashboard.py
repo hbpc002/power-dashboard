@@ -77,6 +77,42 @@ def read_file_content(path, max_lines=200):
             return {"path": path, "size": len(data), "mime": mime, "is_text": False, "can_preview": mime.startswith("image/")}
     except: return None
 
+def search_files(base, query, max_results=200):
+    sp = safe_path(base)
+    if not sp or not os.path.isdir(sp): return None
+    q = query.lower()
+    results, truncated, timed_out = [], False, False
+    SEARCH_SKIP = {".git", ".hg", "node_modules", ".venv", "venv", "__pycache__",
+                   ".cache", ".local", ".docker", ".npm", ".bun", ".Trash"}
+    start = time.time()
+    visited = 0
+    try:
+        for root, dirs, files in os.walk(sp, topdown=True):
+            dirs[:] = [d for d in dirs if d not in SEARCH_SKIP and not os.path.islink(os.path.join(root, d))]
+            for name in dirs + files:
+                full = os.path.join(root, name)
+                is_dir = os.path.isdir(full)
+                if q in name.lower():
+                    try:
+                        sz = 0 if is_dir else os.path.getsize(full)
+                        mt = os.path.getmtime(full)
+                    except OSError:
+                        sz, mt = 0, 0
+                    results.append({"full": full, "rel": os.path.relpath(full, sp),
+                                    "name": name, "is_dir": is_dir, "size": sz,
+                                    "mtime": mt, "mime": get_mime(name) if not is_dir else None})
+                    if len(results) >= max_results:
+                        truncated = True
+                        break
+            visited += len(dirs) + len(files)
+            if truncated: break
+            if visited >= 20000 or time.time() - start > 5.0:
+                timed_out = True
+                break
+    except (PermissionError, OSError):
+        pass
+    return {"base": base, "query": query, "results": results, "truncated": truncated, "timed_out": timed_out}
+
 def delete_path(user_path):
     sp = safe_path(user_path)
     if not sp or not os.path.exists(sp): return {"error": "not found"}
@@ -248,6 +284,58 @@ def get_network():
     except: return None
 
 _history = deque(maxlen=2400)
+FAV_FILE = os.path.expanduser("~/.file-favorites.json")
+
+def read_favorites():
+    try:
+        with open(FAV_FILE) as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+def write_favorites(favs):
+    try:
+        with open(FAV_FILE, "w") as f:
+            json.dump(favs, f)
+        return True
+    except Exception:
+        return False
+
+CONF = os.path.expanduser("~/.battery-monitor.conf")
+CONF_DEFAULTS = {
+    "THRESHOLD": "20",
+    "WEBHOOK_URL": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a19ad6c9-cc46-4d2b-95b1-ee8dadae6ae2",
+    "WEBHOOK_SECRET": "",
+    "WEBSEND_ENABLED": "false",
+    "WEBSEND_URL": "",
+    "WEBSEND_LOW": "20",
+    "WEBSEND_HIGH": "80",
+    "WEBSEND_CMD_ON": "Power%20ON",
+    "WEBSEND_CMD_OFF": "Power%20OFF",
+}
+
+def read_config():
+    cfg = dict(CONF_DEFAULTS)
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k] = v
+    except: pass
+    return cfg
+
+def write_config(cfg):
+    try:
+        with open(CONF, "w") as f:
+            for k in CONF_DEFAULTS:
+                f.write(f"{k}={cfg.get(k, CONF_DEFAULTS[k])}\n")
+        return True
+    except: return False
 
 def push_history(stats):
     net = stats.get("network")
@@ -284,6 +372,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json(d)
         elif p == "/api/history":
             self.send_json(list(_history))
+        elif p == "/api/config":
+            self.send_json(read_config())
+        elif p == "/api/favorites":
+            self.send_json({"favorites": read_favorites()})
+        elif p == "/api/search" and "q" in ps:
+            fp = ps.get("path", ["/home/hbpc"])[0]
+            self.send_json(search_files(fp, ps["q"][0]))
         elif p == "/api/files":
             fp = ps.get("path", ["/home/hbpc"])[0]
             act = ps.get("action", ["list"])[0]
@@ -304,6 +399,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ps = urllib.parse.parse_qs(q)
         if "file" in ps:
             self.send_json(delete_path(ps["file"][0]))
+        elif urllib.parse.urlparse(self.path).path == "/api/favorites" and "path" in ps:
+            fp = ps["path"][0]
+            favs = [f for f in read_favorites() if f != fp]
+            self.send_json({"ok": write_favorites(favs), "favorites": favs})
         else:
             self.send_error(400, "Missing file parameter")
     def do_PUT(self):
@@ -318,6 +417,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json(write_file(ps["file"][0], body))
         elif p == "/api/files" and ps.get("action", [""])[0] == "upload" and "file" in ps:
             self._handle_upload()
+        elif p == "/api/favorites":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            fp = ps.get("path", [None])[0]
+            if not fp:
+                self.send_error(400, "Missing path")
+                return
+            favs = read_favorites()
+            if body.get("action") == "remove":
+                favs = [f for f in favs if f != fp]
+            elif fp not in favs:
+                favs.append(fp)
+            self.send_json({"ok": write_favorites(favs), "favorites": favs})
+        elif p == "/api/config":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            self.send_json({"ok": write_config(body)})
         else:
             self.send_error(400, "Invalid request")
     def _handle_upload(self):
@@ -363,4 +479,4 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Dashboard: http://localhost:{PORT}")
-    http.server.HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
