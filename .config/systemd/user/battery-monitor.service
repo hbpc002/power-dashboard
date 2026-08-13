@@ -1,0 +1,6 @@
+[Unit]
+Description=Battery Low Alert Monitor
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/hbpc/battery-monitor.sh

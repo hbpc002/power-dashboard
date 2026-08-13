@@ -1,0 +1,11 @@
+[Unit]
+Description=Power Dashboard
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/hbpc/power-dashboard.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
