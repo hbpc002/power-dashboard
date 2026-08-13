@@ -1,3 +1,4 @@
 .battery-monitor.conf
 __pycache__/
 *.pyc
+__pycache__/
