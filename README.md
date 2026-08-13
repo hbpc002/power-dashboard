@@ -10,6 +10,9 @@
 | `power-dashboard.html` | 前端仪表盘，温度趋势图 + 文件浏览器 |
 | `battery-monitor.sh` | 低电量 webhook 告警脚本 |
 | `.battery-monitor.conf` | **(需手动创建)** 阈值与 webhook 配置 |
+| `fix-filemgr-sudo.sh` | 一次性配免密删除规则(需 sudo 运行) |
+| `sudoers.filemgr` | 免密删除的 sudoers 规则源文件(由脚本安装) |
+| `KNOWN_PITFALLS.md` | 已知坑与使用注意(必读) |
 | `.config/systemd/user/power-dashboard.service` | 仪表盘自启服务 |
 | `.config/systemd/user/battery-monitor.timer` | 电池检查定时器 (每 5 分钟) |
 | `.config/systemd/user/battery-monitor.service` | 告警脚本 one-shot 服务 |
@@ -78,7 +81,13 @@ sudo firewall-cmd --add-port=8899/tcp --permanent
 
 - 浏览目录、导航上级
 - 图片/音频/视频预览、文本查看与编辑
-- 批量删除、上传文件
+- 批量删除、批量下载(zip)、上传文件
+
+> **删除权限说明:** 服务器以 `hbpc` 运行，默认只能删 `hbpc` 属主的文件。
+> 若 `video_projects_douyin/` 这类目录里的文件属主是别的用户，删除会提示
+> `permission denied`。解决办法(一次性):
+> `sudo bash /home/hbpc/power-dashboard/fix-filemgr-sudo.sh`
+> 详情见 `KNOWN_PITFALLS.md` 中「删除其它用户拥有的文件夹」一节。
 
 ## systemd 管理
 

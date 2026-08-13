@@ -139,12 +139,14 @@ def delete_path(user_path):
     except Exception as e: return {"error": str(e)}
 
 def _attempt_sudo_delete(path):
-    """Try passwordless sudo rm -rf as root, scoped to the allowed directory tree."""
+    """Try passwordless sudo rm -rf as root for targets under the home tree."""
     try:
         import subprocess
-        allowed = "/home/hbpc/video_projects_douyin/"
+        allowed = os.path.expanduser("~")
         real = os.path.realpath(path)
-        if not real.startswith(allowed) or real == allowed.rstrip("/"):
+        if not (real == allowed or real.startswith(allowed + "/")):
+            return
+        if real == allowed:
             return
         subprocess.run(["sudo", "-n", "rm", "-rf", real], capture_output=True, timeout=30)
     except Exception:

@@ -3,7 +3,7 @@ Description=Power Dashboard
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/hbpc/power-dashboard.py
+ExecStart=/usr/bin/python3 /home/hbpc/power-dashboard/power-dashboard.py
 Restart=always
 RestartSec=3
 

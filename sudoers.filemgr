@@ -1,0 +1,6 @@
+# Grant the dashboard (user hbpc) passwordless delete for anything under
+# /home/hbpc/ so the file manager can remove files it doesn't own.
+# The glob /home/hbpc/* matches children but NOT /home/hbpc itself,
+# so the home root can never be deleted via this rule.
+Cmnd_Alias FILEMGR_RM = /bin/rm -rf /home/hbpc/*, /usr/bin/rm -rf /home/hbpc/*
+hbpc ALL=(root) NOPASSWD: FILEMGR_RM
