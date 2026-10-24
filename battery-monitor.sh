@@ -31,21 +31,29 @@ if [ "$need_alert" -eq 0 ]; then
 elif [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$cap" ]; then
     :
 else
-    curl -s -X POST "$WEBHOOK_URL" \
+    curl -s --connect-timeout 5 --proxy http://192.168.1.7:7890 -X POST "$WEBHOOK_URL" \
         -H "Content-Type: application/json" \
-        -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
-        -d "{\"host\":\"$(hostname)\",\"level\":$cap,\"status\":\"$status_lc\"}" >/dev/null 2>&1
+        -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"[$(hostname)] 电量低: ${cap}% (${status_lc})\"}}" >/dev/null 2>&1
     echo "$cap" > "$STATE_FILE"
 fi
 
 # ── WebSend Tasmota ──
 if [ "$WEBSEND_ENABLED" = "true" ] && [ -n "$WEBSEND_URL" ]; then
-    last_ws=$(cat "$WS_STATE" 2>/dev/null || echo "none")
-    if [ "$cap" -le "$WEBSEND_LOW" ] && [ "$last_ws" != "on" ]; then
-        curl -s "${WEBSEND_URL}?cmnd=${WEBSEND_CMD_ON}" >/dev/null 2>&1
-        echo "on" > "$WS_STATE"
-    elif [ "$cap" -ge "$WEBSEND_HIGH" ] && [ "$last_ws" != "off" ]; then
-        curl -s "${WEBSEND_URL}?cmnd=${WEBSEND_CMD_OFF}" >/dev/null 2>&1
-        echo "off" > "$WS_STATE"
+    if [ "$cap" -le "$WEBSEND_LOW" ]; then
+        if curl -sf -m 8 "${WEBSEND_URL}?cmnd=${WEBSEND_CMD_ON}" >/dev/null 2>&1; then
+            echo "on" > "$WS_STATE"
+            logger -t battery-monitor "Tasmota ON sent (cap=${cap} status=${status_lc} ac=${online})"
+        else
+            rm -f "$WS_STATE"
+            logger -t battery-monitor "Tasmota ON FAILED (cap=${cap} status=${status_lc} ac=${online})"
+        fi
+    elif [ "$cap" -ge "$WEBSEND_HIGH" ]; then
+        if curl -sf -m 8 "${WEBSEND_URL}?cmnd=${WEBSEND_CMD_OFF}" >/dev/null 2>&1; then
+            echo "off" > "$WS_STATE"
+            logger -t battery-monitor "Tasmota OFF sent (cap=${cap} status=${status_lc} ac=${online})"
+        else
+            rm -f "$WS_STATE"
+            logger -t battery-monitor "Tasmota OFF FAILED (cap=${cap} status=${status_lc} ac=${online})"
+        fi
     fi
 fi

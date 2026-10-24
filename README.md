@@ -1,94 +1,219 @@
-# 系统资源仪表盘
+# bd - Beads
 
-局域网内实时监控 Linux 笔记本的电池、CPU、内存、磁盘、网络状态，附带文件管理功能。
+**Distributed graph issue tracker for AI agents, powered by [Dolt](https://github.com/dolthub/dolt).**
 
-## 文件
+**Platforms:** macOS, Linux, Windows, FreeBSD
 
-| 文件 | 说明 |
-|---|---|
-| `power-dashboard.py` | HTTP 服务器 (Python3, 无三方依赖)，端口 8899 |
-| `power-dashboard.html` | 前端仪表盘，温度趋势图 + 文件浏览器 |
-| `battery-monitor.sh` | 低电量 webhook 告警脚本 |
-| `.battery-monitor.conf` | **(需手动创建)** 阈值与 webhook 配置 |
-| `.config/systemd/user/power-dashboard.service` | 仪表盘自启服务 |
-| `.config/systemd/user/battery-monitor.timer` | 电池检查定时器 (每 5 分钟) |
-| `.config/systemd/user/battery-monitor.service` | 告警脚本 one-shot 服务 |
+[![License](https://img.shields.io/github/license/gastownhall/beads)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/steveyegge/beads)](https://goreportcard.com/report/github.com/steveyegge/beads)
+[![Release](https://img.shields.io/github/v/release/gastownhall/beads)](https://github.com/gastownhall/beads/releases)
+[![npm version](https://img.shields.io/npm/v/@beads/bd)](https://www.npmjs.com/package/@beads/bd)
+[![PyPI](https://img.shields.io/pypi/v/beads-mcp)](https://pypi.org/project/beads-mcp/)
 
-## 安装
+**Docs:** https://gastownhall.github.io/beads/
 
-```bash
-# 1. 确保 Python3 可用 (默认已装)
-python3 --version
+Beads provides a persistent, structured memory for coding agents. It replaces messy markdown plans with a dependency-aware graph, allowing agents to handle long-horizon tasks without losing context.
 
-# 2. 将项目放到 ~/power-dashboard (或直接放 ~/)
-cd ~
-git clone https://github.com/hbpc002/power-dashboard.git
-cd power-dashboard
-
-# 3. 如果放在别的目录，编辑 .config/systemd/user/* 中的 ExecStart 路径
-
-# 4. 启用用户 linger，确保用户服务在登录前启动
-sudo loginctl enable-linger $USER
-
-# 5. 重载 systemd 用户服务
-systemctl --user daemon-reload
-
-# 6. 启动仪表盘
-systemctl --user enable --now power-dashboard
-
-# 7. （可选）启动低电量告警
-systemctl --user enable --now battery-monitor.timer
-```
-
-## 配置
-
-### 低电量阈值
-
-创建 `~/.battery-monitor.conf`：
-
-```ini
-THRESHOLD=20
-WEBHOOK_URL=http://192.168.1.114:8644/webhooks/power-alert
-WEBHOOK_SECRET=your_secret_here
-```
-
-### 防火墙
-
-确保 8899 端口可达：
+## ⚡ Quick Start
 
 ```bash
-sudo ufw allow 8899  # 如有 ufw
-# 或
-sudo firewall-cmd --add-port=8899/tcp --permanent
+# Install beads CLI (system-wide - don't clone this repo into your project)
+curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
+
+# Initialize in YOUR project
+cd your-project
+bd init
+
+# Optional: refresh or install richer instructions for your agent
+bd setup codex    # Codex CLI - installs skill, AGENTS.md guidance, and hooks
+bd setup claude   # Claude Code - installs hooks/settings
+bd setup factory  # Factory.ai Droid - creates/updates AGENTS.md
 ```
 
-## 使用
+**Note:** Beads is a CLI tool you install once and use everywhere. You don't need to clone this repository into your project.
 
-浏览器打开 `http://<你的局域网IP>:8899`
+`bd init` creates or updates `AGENTS.md` by default so agents can discover the beads workflow, and also installs project Claude/Codex integrations unless you pass `--skip-agents` or `--stealth`. Use `bd setup --list` to see supported integrations, including `bd setup codex`, `bd setup factory`, `bd setup claude`, `bd setup mux`, `bd setup cursor`, and more. See [Agent and IDE setup](docs/SETUP.md).
 
-### 系统监控
+Manual copy-paste is only for unsupported agents, existing projects where you cannot rerun `bd init`/`bd setup`, or custom instruction files. In those cases, run `bd onboard` and paste the printed snippet into the file your agent reads.
 
-- **电池**: 电量、充放电功率、USB-C 适配器能力、循环次数、低电量阈值设置
-- **CPU**: Tctl 温度、频率、总体/单核使用率(柱形图)、负载均值、2 小时温度趋势
-- **内存**: 总量/已用、详情(可用/缓存/缓冲)、使用率趋势
-- **磁盘**: 分区使用率(进度条)、I/O 累计读写
-- **网络**: 实时速率、接收/发送 2 小时趋势、接口列表
+If your agent is not covered by `bd setup`, add this minimal `AGENTS.md` section:
 
-### 文件管理
+```markdown
+This project uses bd (beads) for issue tracking.
 
-- 浏览目录、导航上级
-- 图片/音频/视频预览、文本查看与编辑
-- 批量删除、上传文件
+- Run `bd prime` for workflow context and command guidance.
+- Use `bd ready`, `bd show <id>`, `bd update <id> --claim`, and `bd close <id>`.
+- Use `bd remember "insight"` for persistent project memory; do not create MEMORY.md files.
+- Do not use markdown TODO lists for task tracking.
+```
 
-## systemd 管理
+## 🛠 Features
+
+* **[Dolt](https://github.com/dolthub/dolt)-Powered:** Version-controlled SQL database with cell-level merge, native branching, and built-in sync via Dolt remotes.
+* **Agent-Optimized:** JSON output, dependency tracking, and auto-ready task detection.
+* **Zero Conflict:** Hash-based IDs (`bd-a1b2`) prevent merge collisions in multi-agent/multi-branch workflows.
+* **Compaction:** Semantic "memory decay" summarizes old closed tasks to save context window.
+* **Messaging:** Message issue type with threading (`--thread`), ephemeral lifecycle, and mail delegation.
+* **Graph Links:** `relates_to`, `duplicates`, `supersedes`, and `replies_to` for knowledge graphs.
+
+## 📖 Essential Commands
+
+| Command | Action |
+| --- | --- |
+| `bd ready` | List tasks with no open blockers. |
+| `bd create "Title" -p 0` | Create a P0 task. |
+| `bd update <id> --claim` | Atomically claim a task (sets assignee + in_progress). |
+| `bd dep add <child> <parent>` | Link tasks (blocks, related, parent-child). |
+| `bd show <id>` | View task details and audit trail. |
+| `bd prime` | Print agent workflow context and persistent memories. |
+| `bd remember "insight"` | Store project memory that `bd prime` injects later. |
+
+## 🔗 Hierarchy & Workflow
+
+Beads supports hierarchical IDs for epics:
+
+* `bd-a3f8` (Epic)
+* `bd-a3f8.1` (Task)
+* `bd-a3f8.1.1` (Sub-task)
+
+**Stealth Mode:** Run `bd init --stealth` to use Beads locally without committing files to the main repo. Perfect for personal use on shared projects. See [Git-Free Usage](#-git-free-usage) below.
+
+**Contributor vs Maintainer:** When working on open-source projects:
+
+* **Contributors** (forked repos): Run `bd init --contributor` to route planning issues to a separate repo (e.g., `~/.beads-planning`). Keeps experimental work out of PRs.
+* **Maintainers** (write access): Beads auto-detects maintainer role via SSH URLs or HTTPS with credentials. Only need `git config beads.role maintainer` if using GitHub HTTPS without credentials but you have write access.
+
+## 📦 Installation
 
 ```bash
-# 仪表盘
-systemctl --user status power-dashboard
-systemctl --user restart power-dashboard
-journalctl --user -u power-dashboard -f
-
-# 电池告警
-systemctl --user status battery-monitor.timer
-systemctl --user list-timers
+brew install beads           # macOS / Linux (recommended)
+npm install -g @beads/bd     # Node.js users
 ```
+
+**Other methods:** [install script](docs/INSTALLING.md#quick-install-script-all-platforms) | [go install](docs/INSTALLING.md#a-note-on-go-install-capability) | [from source](docs/INSTALLING.md#build-dependencies-contributors-only) | [Windows](docs/INSTALLING.md#windows-11) | [Arch AUR](docs/INSTALLING.md#linux)
+
+**Requirements:** macOS, Linux, Windows, or FreeBSD. See [docs/INSTALLING.md](docs/INSTALLING.md) for complete installation guide.
+
+**Upgrading?** Replacing the binary is not always the whole story: releases can
+carry schema migrations, and a database that syncs to a Dolt remote must be
+migrated by exactly one designated clone. Back up first (`bd export --all`),
+then follow the [upgrade guide](https://gastownhall.github.io/beads/docs/getting-started/upgrading)
+(also summarized in [docs/INSTALLING.md](docs/INSTALLING.md#updating-bd)).
+
+### Security And Verification
+
+Before trusting any downloaded binary, verify its checksum against the release `checksums.txt`.
+
+The install scripts verify release checksums before install. For manual installs, do this verification yourself before first run.
+
+On macOS, `scripts/install.sh` preserves the downloaded signature by default. Local ad-hoc re-signing is explicit opt-in via `BEADS_INSTALL_RESIGN_MACOS=1`.
+
+See [docs/ANTIVIRUS.md](docs/ANTIVIRUS.md) for Windows AV false-positive guidance and verification workflow.
+
+## 💾 Storage Modes
+
+Beads uses [Dolt](https://github.com/dolthub/dolt) as its database. Two modes
+are available:
+
+### Embedded Mode (default)
+
+```bash
+bd init
+```
+
+Dolt runs in-process — no external server needed. Data lives in
+`.beads/embeddeddolt/`. Single-writer only (file locking enforced).
+This is the recommended mode for most users.
+
+When the git repo has an `origin` remote, `bd init` configures a Dolt remote
+named `origin` automatically. Cross-machine sync uses `bd dolt push` and
+`bd dolt pull` against `refs/dolt/data`; `.beads/issues.jsonl` is an export
+for viewers and interchange, not the source of truth or a full database
+backup.
+
+### Server Mode
+
+```bash
+bd init --server
+```
+
+Connects to an external `dolt sql-server`. Data lives in `.beads/dolt/`.
+Supports multiple concurrent writers. Configure the connection with flags
+or environment variables:
+
+| Flag | Env Var | Default |
+|------|---------|---------|
+| `--server-host` | `BEADS_DOLT_SERVER_HOST` | `127.0.0.1` |
+| `--server-port` | `BEADS_DOLT_SERVER_PORT` | `3307` |
+| `--server-socket` | `BEADS_DOLT_SERVER_SOCKET` | (none; uses TCP) |
+| `--server-user` | `BEADS_DOLT_SERVER_USER` | `root` |
+| | `BEADS_DOLT_PASSWORD` | (none) |
+
+**Unix domain sockets:** Use `--server-socket` to connect via a Unix socket
+instead of TCP. This avoids port conflicts between concurrent projects and
+is useful in sandboxed environments (e.g., Claude Code) where file-level
+access control is simpler than network allowlists. The Dolt server must be
+started with `dolt sql-server --socket <path>`. Auto-start is not supported
+in socket mode.
+
+### Backup & Migration
+
+Back up your database and migrate between modes using `bd backup`:
+
+```bash
+# Set up a backup destination and push
+bd backup init /path/to/backup
+bd backup sync
+
+# Restore into a new project (any mode)
+bd init           # or bd init --server
+bd backup restore --force /path/to/backup
+```
+
+See [docs/DOLT.md](docs/DOLT.md#migrating-between-backends) for full
+migration instructions.
+
+`bd export` and `.beads/issues.jsonl` are issue-table exports. They are useful
+for review, migration, and interoperability, but they do not capture Dolt
+branches, commit history, working-set state, or non-issue tables. Use
+`bd backup` or a manual Dolt backup when you need a restorable database backup.
+
+## 🌐 Community Tools
+
+See [docs/COMMUNITY_TOOLS.md](docs/COMMUNITY_TOOLS.md) for a curated list of community-built UIs, extensions, and integrations—including terminal interfaces, web UIs, editor extensions, and native apps.
+
+## 🚀 Git-Free Usage
+
+Beads works without git. The Dolt database is the storage backend — git
+integration (hooks, repo discovery, identity) is optional.
+
+```bash
+# Initialize without git
+export BEADS_DIR=/path/to/your/project/.beads
+bd init --quiet --stealth
+
+# All core commands work with zero git calls
+bd create "Fix auth bug" -p 1 -t bug
+bd ready --json
+bd update bd-a1b2 --claim
+bd prime
+bd close bd-a1b2 "Fixed"
+```
+
+`BEADS_DIR` tells bd where to put the `.beads/` database directory,
+bypassing git repo discovery. `--stealth` sets `no-git-ops: true` in
+config, disabling all git hook installation and git operations.
+
+This is useful for:
+- **Non-git VCS** (Sapling, Jujutsu, Piper) — no `.git/` directory needed
+- **Monorepos** — point `BEADS_DIR` at a specific subdirectory
+- **CI/CD** — isolated task tracking without repo-level side effects
+- **Evaluation/testing** — ephemeral databases in `/tmp`
+
+For daemon mode without git, use `bd daemon start --local`
+(see [PR #433](https://github.com/gastownhall/beads/pull/433)).
+
+## 📝 Documentation
+
+* [Documentation site](https://gastownhall.github.io/beads/) (versioned) | [Installing](docs/INSTALLING.md) | [Sync Concepts](docs/SYNC_CONCEPTS.md) | [Agent Workflow](AGENT_INSTRUCTIONS.md) | [Copilot CLI Setup](docs/COPILOT_CLI_INTEGRATION.md) | [Copilot VS Code MCP](docs/COPILOT_INTEGRATION.md) | [Articles](ARTICLES.md) | [Sync Branch Mode](docs/PROTECTED_BRANCHES.md) | [Troubleshooting](docs/TROUBLESHOOTING.md) | [FAQ](docs/FAQ.md)
+* [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gastownhall/beads)

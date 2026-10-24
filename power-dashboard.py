@@ -1,9 +1,67 @@
 #!/usr/bin/env python3
-import http.server, json, os, urllib.parse, time, mimetypes, shutil
+import http.server, json, os, urllib.parse, time, mimetypes, shutil, zipfile, io, urllib.request
 from collections import deque
 
-HP = os.path.expanduser("~/power-dashboard.html")
+HP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "power-dashboard.html")
 PORT = 8899
+RADEON_CONF = os.path.expanduser("~/.radeon-usage.conf")
+RADEON_USAGE_URL = "https://developer.amd.com.cn/radeon/api/v1/usage?include_recent=true"
+_usage_cache = {"ts": 0, "data": None}
+
+def compute_rpm_60(recent):
+    """统计 recent 里最近 60 秒窗口内的请求数（相对当前 UTC 时间）。
+    容错：兼容 5/6 位微秒、T/Z 分隔符的 created_at。"""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    cnt = 0
+    for r in recent:
+        ca = r.get("created_at")
+        if not ca:
+            continue
+        try:
+            s = ca.strip()
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            s = s.replace("T", " ")
+            if "." in s:
+                head, tail = s.split(".", 1)
+                frac = tail.split("+")[0].split(" ")[0]
+                frac = frac[:6].ljust(6, "0")
+                tz = tail[len(frac):] if len(tail) > len(frac) else ""
+                s = f"{head}.{frac}{tz}"
+            t = datetime.fromisoformat(s)
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            else:
+                t = t.astimezone(timezone.utc)
+        except Exception:
+            continue
+        if (now - t).total_seconds() <= 60:
+            cnt += 1
+    return cnt
+
+def get_radeon_usage(force=False):
+    global _usage_cache
+    if not force and _usage_cache["data"] and time.time() - _usage_cache["ts"] < 30:
+        return _usage_cache["data"]
+    try:
+        with open(RADEON_CONF) as f:
+            key = f.read().strip()
+    except Exception:
+        return {"status": "not_configured"}
+    if not key:
+        return {"status": "not_configured"}
+    try:
+        req = urllib.request.Request(RADEON_USAGE_URL, headers={"Authorization": "Bearer " + key})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode())
+        recent = data.get("recent") or []
+        data["rpm_60s"] = compute_rpm_60(recent)
+        data.pop("recent", None)
+        _usage_cache = {"ts": time.time(), "data": data}
+        return data
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 MIME_MAP = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
@@ -77,6 +135,42 @@ def read_file_content(path, max_lines=200):
             return {"path": path, "size": len(data), "mime": mime, "is_text": False, "can_preview": mime.startswith("image/")}
     except: return None
 
+def search_files(base, query, max_results=200):
+    sp = safe_path(base)
+    if not sp or not os.path.isdir(sp): return None
+    q = query.lower()
+    results, truncated, timed_out = [], False, False
+    SEARCH_SKIP = {".git", ".hg", "node_modules", ".venv", "venv", "__pycache__",
+                   ".cache", ".local", ".docker", ".npm", ".bun", ".Trash"}
+    start = time.time()
+    visited = 0
+    try:
+        for root, dirs, files in os.walk(sp, topdown=True):
+            dirs[:] = [d for d in dirs if d not in SEARCH_SKIP and not os.path.islink(os.path.join(root, d))]
+            for name in dirs + files:
+                full = os.path.join(root, name)
+                is_dir = os.path.isdir(full)
+                if q in name.lower():
+                    try:
+                        sz = 0 if is_dir else os.path.getsize(full)
+                        mt = os.path.getmtime(full)
+                    except OSError:
+                        sz, mt = 0, 0
+                    results.append({"full": full, "rel": os.path.relpath(full, sp),
+                                    "name": name, "is_dir": is_dir, "size": sz,
+                                    "mtime": mt, "mime": get_mime(name) if not is_dir else None})
+                    if len(results) >= max_results:
+                        truncated = True
+                        break
+            visited += len(dirs) + len(files)
+            if truncated: break
+            if visited >= 20000 or time.time() - start > 5.0:
+                timed_out = True
+                break
+    except (PermissionError, OSError):
+        pass
+    return {"base": base, "query": query, "results": results, "truncated": truncated, "timed_out": timed_out}
+
 def delete_path(user_path):
     sp = safe_path(user_path)
     if not sp or not os.path.exists(sp): return {"error": "not found"}
@@ -91,6 +185,37 @@ def delete_path(user_path):
             return {"error": "not a file or dir"}
     except PermissionError: return {"error": "permission denied"}
     except Exception as e: return {"error": str(e)}
+
+def serve_file_download(filepath, as_attachment=True):
+    sp = safe_path(filepath)
+    if not sp or not os.path.isfile(sp):
+        return None, None, None
+    try:
+        with open(sp, "rb") as f:
+            data = f.read()
+        mime = get_mime(sp)
+        filename = os.path.basename(sp)
+        return data, mime, filename
+    except:
+        return None, None, None
+
+def create_folder_zip(folderpath):
+    sp = safe_path(folderpath)
+    if not sp or not os.path.isdir(sp):
+        return None
+    try:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            folder_name = os.path.basename(sp)
+            for root, dirs, files in os.walk(sp):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.join(folder_name, os.path.relpath(file_path, sp))
+                    zf.write(file_path, arcname)
+        buffer.seek(0)
+        return buffer.getvalue()
+    except Exception as e:
+        return None
 
 def write_file(path, content):
     sp = safe_path(path)
@@ -248,10 +373,30 @@ def get_network():
     except: return None
 
 _history = deque(maxlen=2400)
+FAV_FILE = os.path.expanduser("~/.file-favorites.json")
+
+def read_favorites():
+    try:
+        with open(FAV_FILE) as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+def write_favorites(favs):
+    try:
+        with open(FAV_FILE, "w") as f:
+            json.dump(favs, f)
+        return True
+    except Exception:
+        return False
+
 CONF = os.path.expanduser("~/.battery-monitor.conf")
 CONF_DEFAULTS = {
     "THRESHOLD": "20",
-    "WEBHOOK_URL": "http://192.168.1.114:8644/webhooks/power-alert",
+    "WEBHOOK_URL": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a19ad6c9-cc46-4d2b-95b1-ee8dadae6ae2",
     "WEBHOOK_SECRET": "",
     "WEBSEND_ENABLED": "false",
     "WEBSEND_URL": "",
@@ -316,8 +461,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json(d)
         elif p == "/api/history":
             self.send_json(list(_history))
+        elif p == "/api/usage":
+            self.send_json(get_radeon_usage(force="refresh" in ps))
         elif p == "/api/config":
             self.send_json(read_config())
+        elif p == "/api/favorites":
+            self.send_json({"favorites": read_favorites()})
+        elif p == "/api/search" and "q" in ps:
+            fp = ps.get("path", ["/home/hbpc"])[0]
+            self.send_json(search_files(fp, ps["q"][0]))
         elif p == "/api/files":
             fp = ps.get("path", ["/home/hbpc"])[0]
             act = ps.get("action", ["list"])[0]
@@ -325,6 +477,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_json(read_file_content(ps["file"][0]))
             elif act == "serve" and "file" in ps:
                 self.serve_file(ps["file"][0])
+            elif act == "download" and "file" in ps:
+                self.serve_file_download(ps["file"][0])
+            elif act == "download_folder" and "file" in ps:
+                self.serve_folder_download(ps["file"][0])
             else:
                 self.send_json(list_dir(fp))
         else:
@@ -338,6 +494,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ps = urllib.parse.parse_qs(q)
         if "file" in ps:
             self.send_json(delete_path(ps["file"][0]))
+        elif urllib.parse.urlparse(self.path).path == "/api/favorites" and "path" in ps:
+            fp = ps["path"][0]
+            favs = [f for f in read_favorites() if f != fp]
+            self.send_json({"ok": write_favorites(favs), "favorites": favs})
         else:
             self.send_error(400, "Missing file parameter")
     def do_PUT(self):
@@ -352,6 +512,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json(write_file(ps["file"][0], body))
         elif p == "/api/files" and ps.get("action", [""])[0] == "upload" and "file" in ps:
             self._handle_upload()
+        elif p == "/api/favorites":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            fp = ps.get("path", [None])[0]
+            if not fp:
+                self.send_error(400, "Missing path")
+                return
+            favs = read_favorites()
+            if body.get("action") == "remove":
+                favs = [f for f in favs if f != fp]
+            elif fp not in favs:
+                favs.append(fp)
+            self.send_json({"ok": write_favorites(favs), "favorites": favs})
         elif p == "/api/config":
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -397,8 +570,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
         except:
             self.send_error(500)
+    def serve_file_download(self, filepath):
+        data, mime, filename = serve_file_download(filepath, True)
+        if data is None:
+            self.send_error(404, "File not found")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
+    def serve_folder_download(self, folderpath):
+        zip_data = create_folder_zip(folderpath)
+        if zip_data is None:
+            self.send_error(404, "Folder not found")
+            return
+        folder_name = os.path.basename(safe_path(folderpath))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(zip_data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{folder_name}.zip"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(zip_data)
     def log_message(self, fmt, *args): pass
 
 if __name__ == "__main__":
     print(f"Dashboard: http://localhost:{PORT}")
-    http.server.HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
