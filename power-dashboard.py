@@ -183,7 +183,17 @@ def delete_path(user_path):
             return {"ok": True}
         else:
             return {"error": "not a file or dir"}
-    except PermissionError: return {"error": "permission denied"}
+    except PermissionError:
+        _attempt_sudo_delete(sp)
+        if os.path.exists(sp):
+            owner = "unknown"
+            try:
+                import pwd, grp
+                s = os.stat(sp)
+                owner = f"{pwd.getpwuid(s.st_uid).pw_name}:{grp.getgrgid(s.st_gid).gr_name}"
+            except: pass
+            return {"error": f"permission denied (owner: {owner})"}
+        return {"ok": True}
     except Exception as e: return {"error": str(e)}
 
 def serve_file_download(filepath, as_attachment=True):
@@ -216,6 +226,19 @@ def create_folder_zip(folderpath):
         return buffer.getvalue()
     except Exception as e:
         return None
+def _attempt_sudo_delete(path):
+    """Try passwordless sudo rm -rf as root for targets under the home tree."""
+    try:
+        import subprocess
+        allowed = os.path.expanduser("~")
+        real = os.path.realpath(path)
+        if not (real == allowed or real.startswith(allowed + "/")):
+            return
+        if real == allowed:
+            return
+        subprocess.run(["sudo", "-n", "rm", "-rf", real], capture_output=True, timeout=30)
+    except Exception:
+        pass
 
 def write_file(path, content):
     sp = safe_path(path)
@@ -483,12 +506,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.serve_folder_download(ps["file"][0])
             else:
                 self.send_json(list_dir(fp))
+        elif p == "/api/zip":
+            files = ps.get("file", [])
+            self.send_zip(files)
         else:
             h = read_file(HP) or "<h1>Not found</h1>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(h.encode())
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
     def do_DELETE(self):
         q = urllib.parse.urlparse(self.path).query
         ps = urllib.parse.parse_qs(q)
@@ -595,6 +628,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(zip_data)
+    def send_zip(self, filepaths):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for raw in filepaths:
+                sp = safe_path(raw)
+                if not sp or not os.path.exists(sp):
+                    continue
+                arcname = os.path.basename(raw.rstrip("/\\"))
+                if os.path.isdir(sp):
+                    for root, dirs, files in os.walk(sp):
+                        for fn in files:
+                            fpath = os.path.join(root, fn)
+                            rel = os.path.relpath(fpath, os.path.dirname(sp))
+                            zf.write(fpath, rel)
+                else:
+                    zf.write(sp, arcname)
+        data = buf.getvalue()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", "attachment; filename=selected.zip")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
     def log_message(self, fmt, *args): pass
 
 if __name__ == "__main__":

@@ -178,7 +178,7 @@ function getFileIcon(e){
   return '&#x1f4c4;';
 }
 function renderFileList(path,entries){
-  var html='<div class="row" style="padding:4px 0;flex-wrap:wrap;gap:4px"><label style="cursor:pointer"><input type="checkbox" id="selAll" onchange="toggleAll(this)"> 全选</label> <button class="del-btn" onclick="batchDel()">&#x1f5d1; 删除选中</button> <label class="del-btn" style="background:#2563eb;color:#fff;border:none;cursor:pointer">&#x1f4c4; 上传文件<input type="file" id="uploadInput" multiple style="display:none" onchange="uploadFiles(this.files)"></label></div><div class="row" style="font-size:11px;color:#475569;padding:2px 0"><span style="flex:1;margin-left:22px">名称</span><span style="width:80px;text-align:right">修改日期</span><span style="width:70px;text-align:right">大小</span></div>';
+  var html='<div class="row" style="padding:4px 0;flex-wrap:wrap;gap:4px"><label style="cursor:pointer"><input type="checkbox" id="selAll" onchange="toggleAll(this)"> 全选</label> <button class="del-btn" onclick="batchDel()">&#x1f5d1; 删除选中</button> <button class="del-btn" style="background:#2563eb;color:#fff;border-color:#2563eb" onclick="batchDownload()">&#x1f4e5; 下载选中</button> <label class="del-btn" style="background:#2563eb;color:#fff;border:none;cursor:pointer">&#x1f4c4; 上传文件<input type="file" id="uploadInput" multiple style="display:none" onchange="uploadFiles(this.files)"></label></div><div class="row" style="font-size:11px;color:#475569;padding:2px 0"><span style="flex:1;margin-left:22px">名称</span><span style="width:80px;text-align:right">修改日期</span><span style="width:70px;text-align:right">大小</span></div>';
   if(path!=='/'){html+='<div class="file-row" onclick="navDir(\'..\')"><span class="label">&#x2B05; ..</span><span class="value">-</span></div>';}
   var q=$('searchInput').value.trim().toLowerCase();
   if(q&&entries.length){
@@ -186,9 +186,9 @@ function renderFileList(path,entries){
   }
   entries.forEach(function(e){
     var icon=getFileIcon(e);
-    var n=esc(e.name);var sz=e.is_dir?'-':fmtB(e.size);
-    var a=e.is_dir?"navDir('"+e.name+"')":"viewFile('"+e.name+"')";
-    html+='<div class="file-row" style="display:flex;align-items:center"><input type="checkbox" class="sel-item" value="'+n+'" style="margin-right:6px" onclick="event.stopPropagation()"><span class="label" onclick="'+a+'" style="cursor:pointer;flex:1">'+icon+' '+n+'</span><span class="value" style="font-size:11px;color:#64748b;width:80px;text-align:right">'+fmtDate(e.mtime)+'</span><span class="value" style="width:70px;text-align:right">'+sz+'</span></div>';
+    var raw=e.name;var n=esc(e.name);var sz=e.is_dir?'-':fmtB(e.size);
+    var a=e.is_dir?"navDir('"+e.name.replace(/'/g,"\\'")+"')":"viewFile('"+e.name.replace(/'/g,"\\'")+"')";
+    html+='<div class="file-row" style="display:flex;align-items:center"><input type="checkbox" class="sel-item" value="'+raw.replace(/"/g,"&quot;")+'" style="margin-right:6px" onclick="event.stopPropagation()"><span class="label" onclick="'+a+'" style="cursor:pointer;flex:1">'+icon+' '+n+'</span><span class="value" style="font-size:11px;color:#64748b;width:80px;text-align:right">'+fmtDate(e.mtime)+'</span><span class="value" style="width:70px;text-align:right">'+sz+'</span></div>';
   });
   if(!entries.length){
     html+='<div class="file-row"><span class="label">'+(q?'未找到匹配项':'（空目录）')+'</span></div>';
@@ -210,15 +210,29 @@ function listFiles(path){
   });
 }
 function toggleAll(cb){document.querySelectorAll('.sel-item').forEach(function(e){e.checked=cb.checked;});}
-function batchDel(){
+async function batchDel(){
   var sel=[];document.querySelectorAll('.sel-item:checked').forEach(function(e){sel.push(e.value);});
   if(!sel.length)return alert('请先选择文件');if(!confirm('确认删除选中的 '+sel.length+' 个文件/目录？'))return;
-  var p=currDir;sel.forEach(function(n){
-    fetch('/api/files?file='+encodeURIComponent(p+'/'+n),{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){
-      if(!d.ok)console.warn('删除失败:',n,d.error);
-    });
-  });
-  setTimeout(function(){listFiles(currDir);$('fileContent').classList.add('hidden');},300);
+  var p=currDir;
+  var results=await Promise.all(sel.map(async function(n){
+    try{
+      var r=await fetch('/api/files?file='+encodeURIComponent(p+'/'+n),{method:'DELETE'});
+      return await r.json();
+    }catch(e){return {error:'网络错误: '+e.message};}
+  }));
+  var errs=results.filter(function(r){return !r.ok});
+  if(errs.length){
+    var msgs=errs.map(function(r){return r.error||'未知错误'}).join('; ');
+    alert('删除失败: '+errs.length+' 个文件\n'+msgs);
+  }
+  listFiles(currDir);$('fileContent').classList.add('hidden');
+}
+function batchDownload(){
+  var sel=[];document.querySelectorAll('.sel-item:checked').forEach(function(e){sel.push(e.value);});
+  if(!sel.length)return alert('请先选择文件');
+  var p=currDir;
+  var url='/api/zip?'+sel.map(function(n){return 'file='+encodeURIComponent(p+'/'+n);}).join('&');
+  var a=document.createElement('a');a.href=url;a.download='selected.zip';a.click();
 }
 function uploadFiles(files){
   if(!files.length)return;
